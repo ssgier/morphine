@@ -1,0 +1,15 @@
+[package]
+name = "morphine"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sandro Sgier"]
+repository = "https://github.com/ssgier/morphine"
+readme = "README.md"
+keywords = ["neuromorphic-computing", "spiking-neural-networks"]
+categories = ["science"]
+license = "MIT"
+description = """
+A software-based neuromorphic computing engine
+"""
+
+[dependencies]
