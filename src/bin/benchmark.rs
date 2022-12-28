@@ -96,6 +96,7 @@ fn main() {
 
     let mut spike_count = 0usize;
     let mut synaptic_transmission_count = 0usize;
+    let mut checksum = 0;
     let t_stop = 50000;
 
     let wall_start = Instant::now();
@@ -113,6 +114,7 @@ fn main() {
 
         for nid in tick_result.spiking_nids {
             println!("{},{}", tick_result.t, nid);
+            checksum += nid;
         }
     }
 
@@ -126,4 +128,5 @@ fn main() {
         synaptic_transm_proc_throughput,
         1e9 / synaptic_transm_proc_throughput
     );
+    eprintln!("Checksum: {}", checksum);
 }

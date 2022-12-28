@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpikeCoincidence {
     pub pre_syn_nid: usize,
@@ -7,7 +9,7 @@ pub struct SpikeCoincidence {
 
 #[derive(Debug, Default, Clone)]
 pub struct SpikeCoincidenceDetector {
-    recent_pre_syn_spikes: Vec<PreSynSpike>, // TODO: SmallVec?
+    recent_pre_syn_spikes: VecDeque<PreSynSpike>, // TODO: SmallVec?
 }
 
 impl SpikeCoincidenceDetector {
@@ -21,7 +23,7 @@ impl SpikeCoincidenceDetector {
     ) -> Option<SpikeCoincidence> {
         self.discard_stale(t, t_cutoff);
 
-        self.recent_pre_syn_spikes.push(PreSynSpike {
+        self.recent_pre_syn_spikes.push_back(PreSynSpike {
             nid: pre_syn_nid,
             syn_idx,
             t_transmission: t,
@@ -60,8 +62,13 @@ impl SpikeCoincidenceDetector {
     }
 
     fn discard_stale(&mut self, t: usize, t_cutoff: usize) {
-        self.recent_pre_syn_spikes
-            .retain(|spike| spike.t_transmission + t_cutoff >= t);
+        while let Some(oldest_spike) = self.recent_pre_syn_spikes.front() {
+            if oldest_spike.t_transmission + t_cutoff < t {
+                self.recent_pre_syn_spikes.pop_front();
+            } else {
+                break;
+            }
+        }
     }
 }
 
