@@ -3,92 +3,139 @@ use std::time::Instant;
 use morphine::{
     instance,
     params::{
-        InitialSynWeight, InstanceParams, LayerConnectionParams, LayerParams,
-        PlasticityModulationParams, ShortTermStdpParams, StdpParams, StpParams,
+        InstanceParams,
     },
 };
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
 
+fn get_params() -> InstanceParams {
+    let params_yaml_str = r#"
+layers:
+- num_neurons: 800
+  neuron_params:
+    tau_membrane: 10.0
+    refractory_period: 10
+    reset_voltage: 0.0
+    t_cutoff_coincidence: 20
+    adaptation_threshold: 1.0
+    tau_threshold: 50.0
+    voltage_floor: 0.0
+  plasticity_modulation_params:
+    tau_eligibility_trace: 1000.0
+    eligibility_trace_delay: 20
+    dopamine_modulation_factor: 1.5
+    t_cutoff_eligibility_trace: 1500
+    dopamine_flush_period: 250
+    dopamine_conflation_period: 250
+- num_neurons: 200
+  neuron_params:
+    tau_membrane: 4.0
+    refractory_period: 5
+    reset_voltage: 0.0
+    t_cutoff_coincidence: 20
+    adaptation_threshold: 1.0
+    tau_threshold: 50.0
+    voltage_floor: 0.0
+  plasticity_modulation_params: null
+layer_connections:
+- from_layer_id: 0
+  to_layer_id: 0
+  projection_params:
+    synapse_params:
+      max_weight: 0.5
+      weight_scale_factor: 1.0
+    stp_params: !Depression
+      tau: 800.0
+      p0: 0.9
+      factor: 0.1
+    long_term_stdp_params:
+      factor_potentiation: 0.1
+      tau_potentiation: 20.0
+      factor_depression: -0.12
+      tau_depression: 20.0
+    short_term_stdp_params:
+      stdp_params:
+        factor_potentiation: 0.01
+        tau_potentiation: 20.0
+        factor_depression: 0.012
+        tau_depression: 20.0
+      tau: 500.0
+  connect_density: 0.1
+  connect_width: 2.0
+  initial_syn_weight: !Randomized 0.5
+  conduction_delay_max_random_part: 20
+  conduction_delay_position_distance_scale_factor: 0.0
+  conduction_delay_add_on: 0
+- from_layer_id: 0
+  to_layer_id: 1
+  projection_params:
+    synapse_params:
+      max_weight: 0.5
+      weight_scale_factor: 2.0
+    stp_params: !Depression
+      tau: 800.0
+      p0: 0.9
+      factor: 0.1
+    long_term_stdp_params:
+      factor_potentiation: 0.1
+      tau_potentiation: 20.0
+      factor_depression: -0.12
+      tau_depression: 20.0
+    short_term_stdp_params:
+      stdp_params:
+        factor_potentiation: 0.01
+        tau_potentiation: 20.0
+        factor_depression: 0.012
+        tau_depression: 20.0
+      tau: 500.0
+  connect_density: 0.25
+  connect_width: 2.0
+  initial_syn_weight: !Randomized 0.5
+  conduction_delay_max_random_part: 20
+  conduction_delay_position_distance_scale_factor: 0.0
+  conduction_delay_add_on: 0
+- from_layer_id: 1
+  to_layer_id: 0
+  projection_params:
+    synapse_params:
+      max_weight: 0.5
+      weight_scale_factor: -1.0
+    stp_params: NoStp
+    long_term_stdp_params: null
+    short_term_stdp_params: null
+  connect_density: 0.25
+  connect_width: 2.0
+  initial_syn_weight: !Constant 0.85
+  conduction_delay_max_random_part: 0
+  conduction_delay_position_distance_scale_factor: 0.0
+  conduction_delay_add_on: 0
+- from_layer_id: 1
+  to_layer_id: 1
+  projection_params:
+    synapse_params:
+      max_weight: 0.5
+      weight_scale_factor: -1.0
+    stp_params: NoStp
+    long_term_stdp_params: null
+    short_term_stdp_params: null
+  connect_density: 0.25
+  connect_width: 2.0
+  initial_syn_weight: !Constant 0.85
+  conduction_delay_max_random_part: 0
+  conduction_delay_position_distance_scale_factor: 0.0
+  conduction_delay_add_on: 0
+technical_params:
+  num_threads: 1
+  batched_ring_buffer_size: 21
+"#;
+
+    serde_yaml::from_str(params_yaml_str).unwrap()
+}
+
 fn main() {
-    let mut params = InstanceParams::default();
-    let mut layer = LayerParams::default();
-    layer.neuron_params.refractory_period = 10;
-    layer.num_neurons = 800;
-
-    layer.plasticity_modulation_params = Some(PlasticityModulationParams {
-        tau_eligibility_trace: 1000.0,
-        eligibility_trace_delay: 20,
-        dopamine_modulation_factor: 1.5,
-        t_cutoff_eligibility_trace: 1000,
-        dopamine_flush_period: 100,
-        dopamine_conflation_period: 50,
-    });
-
-    params.layers.push(layer.clone());
-    layer.plasticity_modulation_params = None;
-    layer.num_neurons = 200;
-    layer.neuron_params.tau_membrane = 4.0;
-    layer.neuron_params.refractory_period = 5;
-    params.layers.push(layer);
-
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.initial_syn_weight = InitialSynWeight::Randomized(0.5);
-    connection_params.conduction_delay_position_distance_scale_factor = 0.0;
-    connection_params.connect_width = 2.0;
-    connection_params.connect_density = 0.1;
-    connection_params.conduction_delay_max_random_part = 20;
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 0.5;
-    connection_params.projection_params.long_term_stdp_params = Some(StdpParams::default());
-    connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
-        stdp_params: StdpParams {
-            factor_potentiation: 0.01,
-            tau_potentiation: 20.0,
-            factor_depression: 0.012,
-            tau_depression: 20.0,
-        },
-        tau: 500.0,
-    });
-    connection_params.projection_params.stp_params = StpParams::Depression {
-        tau: 800.0,
-        p0: 0.9,
-        factor: 0.2,
-    };
-    params.layer_connections.push(connection_params.clone());
-    connection_params.connect_density = 0.25;
-    connection_params.to_layer_id = 1;
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = 2.0;
-    params.layer_connections.push(connection_params.clone());
-
-    connection_params.from_layer_id = 1;
-    connection_params.to_layer_id = 0;
-
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.85);
-    connection_params.projection_params.long_term_stdp_params = None;
-    connection_params.projection_params.short_term_stdp_params = None;
-    connection_params.projection_params.stp_params = StpParams::NoStp;
-    connection_params.conduction_delay_max_random_part = 0;
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = -1.0;
-
-    params.layer_connections.push(connection_params.clone());
-    connection_params.to_layer_id = 1;
-    params.layer_connections.push(connection_params);
-
-    params.technical_params.num_threads = Some(1);
-
-    let mut instance = instance::create_instance(params);
-
-    println!("time,nid");
+    let mut instance = instance::create_instance(get_params());
 
     let all_in_channels: Vec<usize> = (0..800).collect();
     let mut rng = StdRng::seed_from_u64(0);
@@ -113,7 +160,6 @@ fn main() {
         synaptic_transmission_count += tick_result.synaptic_transmission_count;
 
         for nid in tick_result.spiking_nids {
-            println!("{},{}", tick_result.t, nid);
             checksum += nid;
         }
     }
