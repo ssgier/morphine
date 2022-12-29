@@ -1,3 +1,4 @@
+use crate::params;
 use crate::params::InstanceParams;
 use crate::partition;
 use crate::partition::Partition;
@@ -9,13 +10,19 @@ use bus::Bus;
 use core_affinity::CoreId;
 use itertools::Itertools;
 use num_cpus;
+use simple_error::{try_with, SimpleError};
 use std::sync::mpsc::channel as mpsc_channel;
 use std::sync::mpsc::Receiver as MpscReceiver;
 use std::thread;
 use std::thread::JoinHandle;
 use std::usize;
 
-pub fn create_instance(params: InstanceParams) -> Instance {
+pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> {
+    try_with!(
+        params::validate_instance_params(&params),
+        "invalid instance parameters"
+    );
+
     let mut broadcast_tx = Bus::new(1);
     let (partition_result_tx, partition_result_rx) = mpsc_channel();
 
@@ -42,7 +49,7 @@ pub fn create_instance(params: InstanceParams) -> Instance {
 
     let broadcast_tx = Some(broadcast_tx);
 
-    Instance {
+    Ok(Instance {
         out_nid_channel_mapping,
         spiking_nid_buffer: Vec::new(),
         broadcast_tx,
@@ -50,7 +57,7 @@ pub fn create_instance(params: InstanceParams) -> Instance {
         num_partitions: num_threads,
         tick_period: 0,
         join_handles,
-    }
+    })
 }
 
 fn get_num_threads(params: &InstanceParams) -> usize {

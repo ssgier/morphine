@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use simple_error::SimpleError;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceParams {
@@ -72,10 +73,10 @@ pub enum StpParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StdpParams {
-    pub factor_potentiation: f32,
-    pub tau_potentiation: f32,
-    pub factor_depression: f32,
-    pub tau_depression: f32,
+    pub factor_pre_before_post: f32,
+    pub tau_pre_before_post: f32,
+    pub factor_pre_after_post: f32,
+    pub tau_pre_after_post: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,7 +113,6 @@ pub struct NeuronParams {
 pub struct TechnicalParams {
     pub num_threads: Option<usize>,
     pub pin_threads: bool,
-    pub batched_ring_buffer_size: usize,
 }
 
 impl Default for LayerParams {
@@ -139,14 +139,11 @@ impl Default for NeuronParams {
     }
 }
 
-const DEFAULT_MAX_CONDUCTION_DELAY: usize = 20;
-
 impl Default for TechnicalParams {
     fn default() -> Self {
         Self {
             num_threads: Some(1),
             pin_threads: false,
-            batched_ring_buffer_size: DEFAULT_MAX_CONDUCTION_DELAY + 1,
         }
     }
 }
@@ -182,10 +179,249 @@ impl Default for StpParams {
 impl Default for StdpParams {
     fn default() -> Self {
         Self {
-            factor_potentiation: 0.1,
-            tau_potentiation: 20.0,
-            factor_depression: -0.12,
-            tau_depression: 20.0,
+            factor_pre_before_post: 0.1,
+            tau_pre_before_post: 20.0,
+            factor_pre_after_post: -0.12,
+            tau_pre_after_post: 20.0,
         }
     }
+}
+
+pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), SimpleError> {
+    for layer_params in &instance_params.layers {
+        validate_layer_params(layer_params)?;
+    }
+
+    for conn_params in &instance_params.layer_connections {
+        if conn_params.from_layer_id >= instance_params.layers.len() {
+            return Err(SimpleError::new("from_layer_id out of bounds"));
+        }
+
+        if conn_params.to_layer_id >= instance_params.layers.len() {
+            return Err(SimpleError::new("to_layer_id out of bounds"));
+        }
+
+        validate_connection_params(conn_params)?;
+    }
+
+    validate_technical_params(&instance_params.technical_params)?;
+
+    Ok(())
+}
+
+fn validate_layer_params(layer_params: &LayerParams) -> Result<(), SimpleError> {
+    validate_neuron_params(&layer_params.neuron_params)?;
+
+    if let Some(plasticity_modulation_params) = &layer_params.plasticity_modulation_params {
+        validate_plasticity_modulation_params(&plasticity_modulation_params)?;
+    }
+
+    Ok(())
+}
+
+fn validate_connection_params(
+    connection_params: &LayerConnectionParams,
+) -> Result<(), SimpleError> {
+    validate_projection_params(&connection_params.projection_params)?;
+
+    if connection_params.connect_density <= 0.0 {
+        return Err(SimpleError::new(
+            "connect_density must be strictly positive",
+        ));
+    }
+
+    if connection_params.connect_width <= 0.0 {
+        return Err(SimpleError::new("connect_width must be strictly positive"));
+    }
+
+    match connection_params.initial_syn_weight {
+        InitialSynWeight::Randomized(max_weight) => {
+            if max_weight < 0.0 {
+                return Err(SimpleError::new(
+                    "Parameter for randomized initial synaptic weight must be strictly positive",
+                ));
+            }
+        }
+        InitialSynWeight::Constant(weight) => {
+            if weight < 0.0 {
+                return Err(SimpleError::new(
+                    "Parameter for constant initial synaptic weight must not be negative",
+                ));
+            }
+        }
+    }
+
+    if connection_params.conduction_delay_position_distance_scale_factor < 0.0 {
+        return Err(SimpleError::new(
+            "conduction_delay_position_distance_scale_factor must not be negative",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_technical_params(technical_parms: &TechnicalParams) -> Result<(), SimpleError> {
+    if let Some(num_threads) = technical_parms.num_threads {
+        if num_cpus::get() < num_threads {
+            return Err(SimpleError::new(
+                "num_threads must not be greater than number of available CPUs",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_neuron_params(neuron_params: &NeuronParams) -> Result<(), SimpleError> {
+    if neuron_params.tau_membrane <= 0.0 {
+        return Err(SimpleError::new("tau_membrane must be strictly positive"));
+    }
+
+    if neuron_params.refractory_period == 0 {
+        return Err(SimpleError::new(
+            "refractory_period must be strictly positive",
+        ));
+    }
+
+    if neuron_params.reset_voltage >= 1.0 {
+        return Err(SimpleError::new("reset_voltage must be less than 1.0"));
+    }
+
+    if neuron_params.reset_voltage < neuron_params.voltage_floor {
+        return Err(SimpleError::new(
+            "reset_voltage must not be less than voltage_floor",
+        ));
+    }
+
+    if neuron_params.reset_voltage >= neuron_params.adaptation_threshold {
+        return Err(SimpleError::new(
+            "reset_voltage must be less than adaptation_threshold",
+        ));
+    }
+
+    if neuron_params.tau_threshold <= 0.0 {
+        return Err(SimpleError::new("tau_threshold must be strictly positive"));
+    }
+
+    if neuron_params.voltage_floor > 0.0 {
+        return Err(SimpleError::new(
+            "voltage_floor must not be greater than zero",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_plasticity_modulation_params(
+    plasticity_modulation_params: &PlasticityModulationParams,
+) -> Result<(), SimpleError> {
+    if plasticity_modulation_params.tau_eligibility_trace <= 0.0 {
+        return Err(SimpleError::new(
+            "tau_eligibility_trace must be strictly positive",
+        ));
+    }
+
+    if plasticity_modulation_params.eligibility_trace_delay
+        > plasticity_modulation_params.t_cutoff_eligibility_trace
+    {
+        return Err(SimpleError::new(
+            "eligibility_trace_delay must not be greater than t_cutoff_eligibility_trace",
+        ));
+    }
+
+    if plasticity_modulation_params.dopamine_modulation_factor <= 0.0 {
+        return Err(SimpleError::new(
+            "dopamine_modulation_factor must be strictly positive",
+        ));
+    }
+
+    if plasticity_modulation_params.dopamine_flush_period
+        % plasticity_modulation_params.dopamine_conflation_period
+        != 0
+    {
+        return Err(SimpleError::new(
+            "dopamine_flush_period must be a multiple of dopamine_conflation_period",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_projection_params(prj_params: &ProjectionParams) -> Result<(), SimpleError> {
+    validate_synapse_params(&prj_params.synapse_params)?;
+    validate_stp_params(&prj_params.stp_params)?;
+
+    if let Some(long_term_stdp_params) = &prj_params.long_term_stdp_params {
+        validate_stdp_params(long_term_stdp_params)?;
+    }
+
+    if let Some(short_term_stdp_params) = &prj_params.short_term_stdp_params {
+        validate_short_term_stdp_params(short_term_stdp_params)?;
+    }
+
+    Ok(())
+}
+
+fn validate_synapse_params(synapse_params: &SynapseParams) -> Result<(), SimpleError> {
+    if synapse_params.max_weight <= 0.0 {
+        return Err(SimpleError::new("max_weight must be strictly positive"));
+    }
+
+    Ok(())
+}
+
+fn validate_stp_params(stp_params: &StpParams) -> Result<(), SimpleError> {
+    match *stp_params {
+        StpParams::NoStp => Ok(()),
+        StpParams::Depression { tau, p0, factor } => validate_stp_params_inner(tau, p0, factor),
+        StpParams::Facilitation { tau, p0, factor } => validate_stp_params_inner(tau, p0, factor),
+    }
+}
+
+fn validate_stp_params_inner(tau: f32, p0: f32, factor: f32) -> Result<(), SimpleError> {
+    if tau <= 0.0 {
+        return Err(SimpleError::new(
+            "stp_params: tau must be strictly positive",
+        ));
+    }
+
+    if p0 < 0.0 || p0 > 1.0 {
+        return Err(SimpleError::new("stp_params: p0 must be in [0, 1]"));
+    }
+
+    if factor <= 0.0 || factor > 1.0 {
+        return Err(SimpleError::new("stp_params: factor must be in (0, 1]"));
+    }
+
+    Ok(())
+}
+
+fn validate_stdp_params(stdp_params: &StdpParams) -> Result<(), SimpleError> {
+    if stdp_params.tau_pre_before_post <= 0.0 {
+        return Err(SimpleError::new(
+            "tau_pre_before_post must be strictly positive",
+        ));
+    }
+
+    if stdp_params.tau_pre_after_post <= 0.0 {
+        return Err(SimpleError::new(
+            "tau_pre_after_post must be strictly positive",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_short_term_stdp_params(
+    short_term_stdp_params: &ShortTermStdpParams,
+) -> Result<(), SimpleError> {
+    validate_stdp_params(&short_term_stdp_params.stdp_params)?;
+
+    if short_term_stdp_params.tau <= 0.0 {
+        return Err(SimpleError::new(
+            "short_term_stdp_params: tau must be strictly positive",
+        ));
+    }
+
+    Ok(())
 }

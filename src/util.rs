@@ -11,9 +11,11 @@ pub fn compute_stdp(t_pre_minus_post: i64, stdp_params: &StdpParams) -> f32 {
     let t_pre_minus_post = t_pre_minus_post as f32;
 
     if t_pre_minus_post > 0.0 {
-        stdp_params.factor_depression * (-t_pre_minus_post / stdp_params.tau_depression).exp()
+        stdp_params.factor_pre_after_post
+            * (-t_pre_minus_post / stdp_params.tau_pre_after_post).exp()
     } else {
-        stdp_params.factor_potentiation * (t_pre_minus_post / stdp_params.tau_potentiation).exp()
+        stdp_params.factor_pre_before_post
+            * (t_pre_minus_post / stdp_params.tau_pre_before_post).exp()
     }
 }
 
@@ -61,10 +63,10 @@ mod tests {
     use float_cmp::assert_approx_eq;
 
     const PARAMS: StdpParams = StdpParams {
-        factor_potentiation: 0.1,
-        tau_potentiation: 20.0,
-        factor_depression: -0.12,
-        tau_depression: 25.0,
+        factor_pre_before_post: 0.1,
+        tau_pre_before_post: 20.0,
+        factor_pre_after_post: -0.12,
+        tau_pre_after_post: 25.0,
     };
 
     #[test]

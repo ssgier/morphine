@@ -93,9 +93,6 @@ pub fn create_partitions(
             neurons.push(Neuron::new());
         }
 
-        let transmission_buffer =
-            BatchedRingBuffer::new(params.technical_params.batched_ring_buffer_size);
-
         let plasticity_modulator = layer_params
             .plasticity_modulation_params
             .as_ref()
@@ -167,22 +164,36 @@ pub fn create_partitions(
                         }
                     }
 
-                    synapses.sort_by_key(|synapse| synapse.neuron_idx);
+                    if !synapses.is_empty() {
+                        synapses.sort_by_key(|synapse| synapse.neuron_idx);
 
-                    let projection = Projection {
-                        synapses,
-                        stp: short_term_plasticity::create(
-                            &connection_params.projection_params.stp_params,
-                        ),
-                        prj_params: connection_params.projection_params.clone(),
-                        last_pre_syn_spike_t: None,
-                        next_to_last_pre_syn_spike_t: None,
-                    };
+                        let projection = Projection {
+                            synapses,
+                            stp: short_term_plasticity::create(
+                                &connection_params.projection_params.stp_params,
+                            ),
+                            prj_params: connection_params.projection_params.clone(),
+                            last_pre_syn_spike_t: None,
+                            next_to_last_pre_syn_spike_t: None,
+                        };
 
-                    nid_to_projection.insert(from_nid, projection);
+                        nid_to_projection.insert(from_nid, projection);
+                    }
                 }
             }
         }
+
+        let max_conduction_delay = nid_to_projection
+            .values()
+            .map(|projection| projection.synapses.iter())
+            .flatten()
+            .map(|synapse| synapse.conduction_delay)
+            .max()
+            .unwrap_or(0);
+
+        let batched_ring_buffer_size = max_conduction_delay as usize + 1;
+
+        let transmission_buffer = BatchedRingBuffer::new(batched_ring_buffer_size);
 
         let partition = Partition {
             nid_start: layer_nid_starts[layer_id] + partition_range.start,

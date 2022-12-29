@@ -23,14 +23,14 @@ fn make_simple_1_in_1_out_instance(weight: f32) -> Instance {
     connection_params.initial_syn_weight = InitialSynWeight::Constant(weight);
     params.layer_connections.push(connection_params);
 
-    create_instance(params)
+    create_instance(params).unwrap()
 }
 
 const STDP_PARAMS: StdpParams = StdpParams {
-    factor_potentiation: 0.1,
-    tau_potentiation: 20.0,
-    factor_depression: -0.11,
-    tau_depression: 25.0,
+    factor_pre_before_post: 0.1,
+    tau_pre_before_post: 20.0,
+    factor_pre_after_post: -0.11,
+    tau_pre_after_post: 25.0,
 };
 
 #[test]
@@ -41,7 +41,7 @@ fn single_neuron() {
 
     params.layers.push(layer);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     // t = 0: empty context, expect empty result
     let tick_0_result = instance.tick(&[], 0.0, false);
@@ -191,7 +191,7 @@ fn two_epsps_and_one_ipsp() {
 
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick_no_input(); // start with an empty tick for test diversity
 
@@ -234,7 +234,7 @@ fn voltage_floor() {
 
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     // double tick on channel 0
     instance.tick(&[0, 0], 0.0, false);
@@ -263,7 +263,7 @@ fn threshold_adaptation() {
     connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     // trigger spike in nid 1
     instance.tick(&[0, 0], 0.0, false);
@@ -304,7 +304,7 @@ fn simple_potentiation_long_term_stdp() {
     connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
     instance.tick_no_input(); // nid 1 spikes
@@ -345,7 +345,7 @@ fn synaptic_transmission_count() {
     connection_params.connect_density = 0.5;
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
     let tick_1_result = instance.tick_no_input();
@@ -375,7 +375,7 @@ fn simple_potentiation_short_term_stdp() {
     });
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
     instance.tick_no_input(); // nid 1 spikes
@@ -414,7 +414,7 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
 
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
 
@@ -453,17 +453,17 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
 
     connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
-            factor_potentiation: 0.05,
-            tau_potentiation: 15.0,
-            factor_depression: -0.06,
-            tau_depression: 20.0,
+            factor_pre_before_post: 0.05,
+            tau_pre_before_post: 15.0,
+            factor_pre_after_post: -0.06,
+            tau_pre_after_post: 20.0,
         },
         tau: 10.0,
     });
 
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
 
@@ -514,7 +514,7 @@ fn stdp_alternating_pre_post_syn_spikes() {
 
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[1], 0.0, false);
     instance.tick_no_input_until(8);
@@ -564,7 +564,7 @@ fn long_term_stdp_complex_scenario() {
         .max_weight = 1.0;
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
     instance.tick_no_input_until(8);
@@ -668,7 +668,7 @@ fn no_dopamine() {
     connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0, 0], 0.0, false);
     instance.tick_no_input(); // nid 1 spikes
@@ -708,7 +708,7 @@ fn simple_dopamine_scenario() {
     connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     // two tick at nid 0 cause tick at nid 1 next cycle, creating an eligibility trace
     instance.tick(&[0, 0], 0.0, false);
@@ -756,7 +756,7 @@ fn short_term_plasticity() {
     };
     params.layer_connections.push(connection_params);
 
-    let mut instance = create_instance(params);
+    let mut instance = create_instance(params).unwrap();
 
     instance.tick(&[0], 0.0, false);
 
@@ -846,10 +846,10 @@ fn get_scenario_template_params() -> InstanceParams {
     connection_params.projection_params.long_term_stdp_params = Some(StdpParams::default());
     connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
-            factor_potentiation: 0.01,
-            tau_potentiation: 20.0,
-            factor_depression: 0.012,
-            tau_depression: 20.0,
+            factor_pre_before_post: 0.01,
+            tau_pre_before_post: 20.0,
+            factor_pre_after_post: 0.012,
+            tau_pre_after_post: 20.0,
         },
         tau: 500.0,
     });
@@ -924,39 +924,16 @@ fn assert_equivalence(instances: &mut [Instance], t_stop: usize) {
 #[test]
 fn invariance_partitioning_buffering() {
     let thread_counts = vec![1, 6, 7];
-    let ring_buffer_sizes = vec![21, 24];
-
     let mut instances = Vec::new();
 
     for thread_count in thread_counts {
-        for ring_buffer_size in &ring_buffer_sizes {
-            let mut params = get_scenario_template_params();
+        let mut params = get_scenario_template_params();
 
-            params.technical_params.num_threads = Some(thread_count);
-            params.technical_params.batched_ring_buffer_size = *ring_buffer_size;
-
-            instances.push(instance::create_instance(params));
-        }
+        params.technical_params.num_threads = Some(thread_count);
+        instances.push(instance::create_instance(params).unwrap());
     }
 
     assert_equivalence(&mut instances, 102);
-}
-
-#[test]
-fn zero_vs_absent_stp() {
-    let mut params = get_scenario_template_params();
-
-    params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
-        tau: 1000.0,
-        p0: 1.0,
-        factor: 0.0,
-    };
-
-    let mut instances = Vec::new();
-    instances.push(instance::create_instance(params.clone()));
-    params.layer_connections[0].projection_params.stp_params = StpParams::NoStp;
-    instances.push(instance::create_instance(params));
-    assert_equivalence(&mut instances, 50);
 }
 
 #[test]
@@ -974,18 +951,18 @@ fn zero_vs_absent_long_term_stdp() {
     params.layer_connections[0]
         .projection_params
         .long_term_stdp_params = Some(StdpParams {
-        factor_potentiation: 0.0,
-        tau_potentiation: 20.0,
-        factor_depression: 0.0,
-        tau_depression: 20.0,
+        factor_pre_before_post: 0.0,
+        tau_pre_before_post: 20.0,
+        factor_pre_after_post: 0.0,
+        tau_pre_after_post: 20.0,
     });
 
     let mut instances = Vec::new();
-    instances.push(instance::create_instance(params.clone()));
+    instances.push(instance::create_instance(params.clone()).unwrap());
     params.layer_connections[0]
         .projection_params
         .long_term_stdp_params = None;
-    instances.push(instance::create_instance(params));
+    instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 100);
 }
 
@@ -1005,20 +982,20 @@ fn zero_vs_absent_short_term_stdp() {
         .projection_params
         .short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
-            factor_potentiation: 0.0,
-            tau_potentiation: 20.0,
-            factor_depression: 0.0,
-            tau_depression: 20.0,
+            factor_pre_before_post: 0.0,
+            tau_pre_before_post: 20.0,
+            factor_pre_after_post: 0.0,
+            tau_pre_after_post: 20.0,
         },
         tau: 500.0,
     });
 
     let mut instances = Vec::new();
-    instances.push(instance::create_instance(params.clone()));
+    instances.push(instance::create_instance(params.clone()).unwrap());
     params.layer_connections[0]
         .projection_params
         .short_term_stdp_params = None;
-    instances.push(instance::create_instance(params));
+    instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 100);
 }
 
@@ -1026,11 +1003,11 @@ fn zero_vs_absent_short_term_stdp() {
 fn zero_vs_absent_plasticity_modulation() {
     let mut params = get_scenario_template_params();
     let mut instances = Vec::new();
-    instances.push(instance::create_instance(params.clone()));
+    instances.push(instance::create_instance(params.clone()).unwrap());
     params.layers[0].plasticity_modulation_params = None;
     params.layer_connections[0]
         .projection_params
         .long_term_stdp_params = None;
-    instances.push(instance::create_instance(params));
+    instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 110);
 }

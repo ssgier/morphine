@@ -46,16 +46,16 @@ layer_connections:
       p0: 0.9
       factor: 0.1
     long_term_stdp_params:
-      factor_potentiation: 0.1
-      tau_potentiation: 20.0
-      factor_depression: -0.12
-      tau_depression: 20.0
+      factor_pre_before_post: 0.1
+      tau_pre_before_post: 20.0
+      factor_pre_after_post: -0.12
+      tau_pre_after_post: 20.0
     short_term_stdp_params:
       stdp_params:
-        factor_potentiation: 0.01
-        tau_potentiation: 20.0
-        factor_depression: 0.012
-        tau_depression: 20.0
+        factor_pre_before_post: 0.01
+        tau_pre_before_post: 20.0
+        factor_pre_after_post: 0.012
+        tau_pre_after_post: 20.0
       tau: 500.0
   connect_density: 0.1
   connect_width: 2.0
@@ -74,16 +74,16 @@ layer_connections:
       p0: 0.9
       factor: 0.1
     long_term_stdp_params:
-      factor_potentiation: 0.1
-      tau_potentiation: 20.0
-      factor_depression: -0.12
-      tau_depression: 20.0
+      factor_pre_before_post: 0.1
+      tau_pre_before_post: 20.0
+      factor_pre_after_post: -0.12
+      tau_pre_after_post: 20.0
     short_term_stdp_params:
       stdp_params:
-        factor_potentiation: 0.01
-        tau_potentiation: 20.0
-        factor_depression: 0.012
-        tau_depression: 20.0
+        factor_pre_before_post: 0.01
+        tau_pre_before_post: 20.0
+        factor_pre_after_post: 0.012
+        tau_pre_after_post: 20.0
       tau: 500.0
   connect_density: 0.25
   connect_width: 2.0
@@ -131,7 +131,7 @@ technical_params:
 }
 
 fn main() {
-    let mut instance = instance::create_instance(get_params());
+    let mut instance = instance::create_instance(get_params()).unwrap();
 
     let all_in_channels: Vec<usize> = (0..800).collect();
     let mut rng = StdRng::seed_from_u64(0);
