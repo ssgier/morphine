@@ -111,6 +111,7 @@ pub struct NeuronParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TechnicalParams {
     pub num_threads: Option<usize>,
+    pub pin_threads: bool,
     pub batched_ring_buffer_size: usize,
 }
 
@@ -144,6 +145,7 @@ impl Default for TechnicalParams {
     fn default() -> Self {
         Self {
             num_threads: Some(1),
+            pin_threads: false,
             batched_ring_buffer_size: DEFAULT_MAX_CONDUCTION_DELAY + 1,
         }
     }

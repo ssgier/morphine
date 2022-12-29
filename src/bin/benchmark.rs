@@ -1,11 +1,6 @@
 use std::time::Instant;
 
-use morphine::{
-    instance,
-    params::{
-        InstanceParams,
-    },
-};
+use morphine::{instance, params::InstanceParams};
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
@@ -128,6 +123,7 @@ layer_connections:
   conduction_delay_add_on: 0
 technical_params:
   num_threads: 1
+  pin_threads: false
   batched_ring_buffer_size: 21
 "#;
 

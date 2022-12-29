@@ -6,11 +6,13 @@ use crate::partition::TickContext;
 use crate::state_snapshot::StateSnapshot;
 use crate::types::HashMap;
 use bus::Bus;
+use core_affinity::CoreId;
 use itertools::Itertools;
 use num_cpus;
 use std::sync::mpsc::channel as mpsc_channel;
 use std::sync::mpsc::Receiver as MpscReceiver;
 use std::thread;
+use std::thread::JoinHandle;
 use std::usize;
 
 pub fn create_instance(params: InstanceParams) -> Instance {
@@ -18,19 +20,27 @@ pub fn create_instance(params: InstanceParams) -> Instance {
     let (partition_result_tx, partition_result_rx) = mpsc_channel();
 
     let num_threads = get_num_threads(&params);
+    let mut join_handles = Vec::new();
 
     for thread_id in 0..num_threads {
         let broadcast_rx = broadcast_tx.add_rx();
         let partition_result_tx = partition_result_tx.clone();
         let params = params.clone();
 
-        thread::spawn(move || {
+        join_handles.push(thread::spawn(move || {
+            if params.technical_params.pin_threads {
+                let core_id = CoreId { id: thread_id };
+                core_affinity::set_for_current(core_id);
+            }
+
             let mut partitions = partition::create_partitions(num_threads, thread_id, &params);
             Partition::run(&mut partitions, broadcast_rx, partition_result_tx);
-        });
+        }));
     }
 
     let out_nid_channel_mapping = create_out_nid_channel_mapping(&params);
+
+    let broadcast_tx = Some(broadcast_tx);
 
     Instance {
         out_nid_channel_mapping,
@@ -39,6 +49,7 @@ pub fn create_instance(params: InstanceParams) -> Instance {
         partition_result_rx,
         num_partitions: num_threads,
         tick_period: 0,
+        join_handles,
     }
 }
 
@@ -76,10 +87,11 @@ pub struct TickResult {
 pub struct Instance {
     out_nid_channel_mapping: HashMap<usize, usize>,
     spiking_nid_buffer: Vec<usize>,
-    broadcast_tx: Bus<TickContext>,
+    broadcast_tx: Option<Bus<TickContext>>,
     partition_result_rx: MpscReceiver<PartitionGroupResult>,
     num_partitions: usize,
     tick_period: usize,
+    join_handles: Vec<JoinHandle<()>>,
 }
 
 impl Instance {
@@ -104,7 +116,7 @@ impl Instance {
             extract_state_snapshot,
         };
 
-        self.broadcast_tx.broadcast(ctx);
+        self.broadcast_tx.as_mut().unwrap().broadcast(ctx);
 
         let mut partition_group_results = Vec::new();
 
@@ -159,6 +171,16 @@ impl Instance {
     }
 }
 
+impl Drop for Instance {
+    fn drop(&mut self) {
+        drop(self.broadcast_tx.take()); // signals the worker threads to exit the loop
+
+        self.join_handles.drain(..).for_each(|join_handle| {
+            join_handle.join().ok();
+        });
+    }
+}
+
 fn aggregate_state_snapshot(partition_group_results: &[PartitionGroupResult]) -> StateSnapshot {
     let neuron_states: Vec<_> = partition_group_results
         .iter()
@@ -188,7 +210,7 @@ mod tests {
     fn simple_round_trip() {
         let num_partitions = 2;
 
-        let broadcast_tx = Bus::new(1);
+        let broadcast_tx = Some(Bus::new(1));
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
 
         let spiking_in_channel_id = 3;
@@ -205,12 +227,13 @@ mod tests {
             partition_result_rx,
             num_partitions,
             tick_period: 0,
+            join_handles: Vec::new(),
         };
 
         let join_handles: Vec<_> = (0..num_partitions)
             .into_iter()
             .map(|partition_id| {
-                let mut broadcast_rx = instance.broadcast_tx.add_rx();
+                let mut broadcast_rx = instance.broadcast_tx.as_mut().unwrap().add_rx();
                 let partition_result_tx = partition_result_tx.clone();
                 thread::spawn(move || {
                     // first cycle
@@ -275,7 +298,7 @@ mod tests {
     fn echo_instance() {
         let num_partitions = 1;
 
-        let broadcast_tx = Bus::new(1);
+        let broadcast_tx = Some(Bus::new(1));
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
         let mut out_nid_channel_mapping = HashMap::default();
 
@@ -290,9 +313,10 @@ mod tests {
             partition_result_rx,
             num_partitions,
             tick_period: 0,
+            join_handles: Vec::new(),
         };
 
-        let mut broadcast_rx = instance.broadcast_tx.add_rx();
+        let mut broadcast_rx = instance.broadcast_tx.as_mut().unwrap().add_rx();
 
         let join_handle = thread::spawn(move || {
             while let Ok(ctx) = broadcast_rx.recv() {
