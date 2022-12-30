@@ -194,11 +194,17 @@ pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), 
 
     for conn_params in &instance_params.layer_connections {
         if conn_params.from_layer_id >= instance_params.layers.len() {
-            return Err(SimpleError::new("from_layer_id out of bounds"));
+            return Err(SimpleError::new(format!(
+                "invalid from_layer_id: {}",
+                conn_params.from_layer_id
+            )));
         }
 
         if conn_params.to_layer_id >= instance_params.layers.len() {
-            return Err(SimpleError::new("to_layer_id out of bounds"));
+            return Err(SimpleError::new(format!(
+                "invalid to_layer_id: {}",
+                conn_params.to_layer_id
+            )));
         }
 
         validate_connection_params(conn_params)?;
@@ -224,19 +230,17 @@ fn validate_connection_params(
 ) -> Result<(), SimpleError> {
     validate_projection_params(&connection_params.projection_params)?;
 
-    if connection_params.connect_density <= 0.0 {
-        return Err(SimpleError::new(
-            "connect_density must be strictly positive",
-        ));
+    if connection_params.connect_density <= 0.0 || connection_params.connect_density > 1.0 {
+        return Err(SimpleError::new("connect_density must be in (0, 1]"));
     }
 
-    if connection_params.connect_width <= 0.0 {
-        return Err(SimpleError::new("connect_width must be strictly positive"));
+    if connection_params.connect_width <= 0.0 || connection_params.connect_width > 2.0 {
+        return Err(SimpleError::new("connect_width must be in (0, 2]"));
     }
 
     match connection_params.initial_syn_weight {
         InitialSynWeight::Randomized(max_weight) => {
-            if max_weight < 0.0 {
+            if max_weight <= 0.0 {
                 return Err(SimpleError::new(
                     "Parameter for randomized initial synaptic weight must be strictly positive",
                 ));
@@ -424,4 +428,506 @@ fn validate_short_term_stdp_params(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::util::test_util;
+
+    #[test]
+    fn valid_params() {
+        let params = test_util::get_template_instance_params();
+        assert!(validate_instance_params(&params).is_ok());
+    }
+
+    #[test]
+    fn zero_tau_membrane() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.tau_membrane = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "tau_membrane must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn zero_refractory_period() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.refractory_period = 0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "refractory_period must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn too_high_reset_voltage() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.reset_voltage = 1.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "reset_voltage must be less than 1.0"
+        );
+    }
+
+    #[test]
+    fn reset_voltage_lower_than_floor() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.reset_voltage = -0.1;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "reset_voltage must not be less than voltage_floor"
+        );
+    }
+
+    #[test]
+    fn reset_voltage_not_less_than_adaptation_threshold() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.adaptation_threshold = 0.5;
+        params.layers[0].neuron_params.reset_voltage = 0.5;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "reset_voltage must be less than adaptation_threshold"
+        );
+    }
+
+    #[test]
+    fn zero_tau_threshold() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.tau_threshold = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "tau_threshold must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn voltage_floor_greater_than_zero() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].neuron_params.reset_voltage = 0.1;
+        params.layers[0].neuron_params.voltage_floor = 0.1;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "voltage_floor must not be greater than zero"
+        );
+    }
+
+    #[test]
+    fn zero_tau_elig_trace() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0]
+            .plasticity_modulation_params
+            .as_mut()
+            .unwrap()
+            .tau_eligibility_trace = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "tau_eligibility_trace must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn elig_trace_delay_greater_than_cutoff() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0]
+            .plasticity_modulation_params
+            .as_mut()
+            .unwrap()
+            .eligibility_trace_delay = 1501;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "eligibility_trace_delay must not be greater than t_cutoff_eligibility_trace"
+        );
+    }
+
+    #[test]
+    fn zero_dopamine_modulation_factor() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0]
+            .plasticity_modulation_params
+            .as_mut()
+            .unwrap()
+            .dopamine_modulation_factor = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "dopamine_modulation_factor must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn flush_period_nod_multiple_of_conflation_period() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0]
+            .plasticity_modulation_params
+            .as_mut()
+            .unwrap()
+            .dopamine_flush_period = 251;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "dopamine_flush_period must be a multiple of dopamine_conflation_period"
+        );
+    }
+
+    #[test]
+    fn invalid_from_layer_id() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].from_layer_id = 2;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(result.unwrap_err().as_str(), "invalid from_layer_id: 2");
+    }
+
+    #[test]
+    fn invalid_to_layer_id() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].to_layer_id = 2;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(result.unwrap_err().as_str(), "invalid to_layer_id: 2");
+    }
+
+    #[test]
+    fn zero_connect_density() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].connect_density = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "connect_density must be in (0, 1]"
+        );
+    }
+
+    #[test]
+    fn too_high_connect_density() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].connect_density = 1.1;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "connect_density must be in (0, 1]"
+        );
+    }
+
+    #[test]
+    fn zero_connect_width() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].connect_width = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "connect_width must be in (0, 2]"
+        );
+    }
+
+    #[test]
+    fn too_high_connect_width() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].connect_width = 2.1;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "connect_width must be in (0, 2]"
+        );
+    }
+
+    #[test]
+    fn zero_initial_weight_randomized() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].initial_syn_weight = InitialSynWeight::Randomized(0.0);
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "Parameter for randomized initial synaptic weight must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn negative_initial_weight_constant() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].initial_syn_weight = InitialSynWeight::Constant(-0.1);
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "Parameter for constant initial synaptic weight must not be negative"
+        );
+    }
+
+    #[test]
+    fn negative_conduction_delay_distance_scale_factor() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].conduction_delay_position_distance_scale_factor = -0.1;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "conduction_delay_position_distance_scale_factor must not be negative"
+        );
+    }
+
+    #[test]
+    fn zero_max_weight() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0]
+            .projection_params
+            .synapse_params
+            .max_weight = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "max_weight must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn zero_tau_stp_facilitation() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+            tau: 0.0,
+            p0: 0.5,
+            factor: 0.5,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: tau must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn negative_p0_facilitation() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+            tau: 100.0,
+            p0: -0.1,
+            factor: 0.5,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: p0 must be in [0, 1]"
+        );
+    }
+
+    #[test]
+    fn zero_factor_facilitation() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+            tau: 100.0,
+            p0: 0.5,
+            factor: 0.0,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: factor must be in (0, 1]"
+        );
+    }
+
+    #[test]
+    fn zero_tau_stp_depression() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+            tau: 0.0,
+            p0: 0.5,
+            factor: 0.5,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: tau must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn too_high_p0_depression() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+            tau: 100.0,
+            p0: 1.1,
+            factor: 0.5,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: p0 must be in [0, 1]"
+        );
+    }
+
+    #[test]
+    fn too_high_factor_depression() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+            tau: 100.0,
+            p0: 0.5,
+            factor: 1.1,
+        };
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "stp_params: factor must be in (0, 1]"
+        );
+    }
+
+    #[test]
+    fn zero_tau_pre_before_post_short_term_stdp() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0]
+            .projection_params
+            .short_term_stdp_params
+            .as_mut()
+            .unwrap()
+            .stdp_params
+            .tau_pre_before_post = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "tau_pre_before_post must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn zero_tau_pre_after_post_long_term_stdp() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0]
+            .projection_params
+            .long_term_stdp_params
+            .as_mut()
+            .unwrap()
+            .tau_pre_after_post = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "tau_pre_after_post must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn zero_tau_short_term_stdp() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0]
+            .projection_params
+            .short_term_stdp_params
+            .as_mut()
+            .unwrap()
+            .tau = 0.0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "short_term_stdp_params: tau must be strictly positive"
+        );
+    }
+
+    #[test]
+    fn too_high_num_threads() {
+        let mut params = test_util::get_template_instance_params();
+        params.technical_params.num_threads = Some(num_cpus::get() + 1);
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "num_threads must not be greater than number of available CPUs"
+        );
+    }
 }
