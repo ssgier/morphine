@@ -34,6 +34,29 @@ const STDP_PARAMS: StdpParams = StdpParams {
 };
 
 #[test]
+fn empty_instance() {
+    let params = InstanceParams::default();
+    let mut instance = create_instance(params).unwrap();
+    let tick_0_result = instance.tick_no_input();
+    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_0_result.spiking_nids.is_empty());
+}
+
+#[test]
+fn empty_output_layer() {
+    let mut params = InstanceParams::default();
+    let mut layer_params = LayerParams::default();
+    layer_params.num_neurons = 1;
+    params.layers.push(layer_params.clone());
+    layer_params.num_neurons = 0;
+    params.layers.push(layer_params);
+    let mut instance = create_instance(params).unwrap();
+    let tick_0_result = instance.tick(&[0], 0.0, false);
+    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    assert_equal(tick_0_result.spiking_nids, [0]);
+}
+
+#[test]
 fn single_neuron() {
     let mut params = InstanceParams::default();
     let mut layer = LayerParams::default();

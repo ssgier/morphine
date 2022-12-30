@@ -71,12 +71,14 @@ fn create_out_nid_channel_mapping(params: &InstanceParams) -> HashMap<usize, usi
     let mut result = HashMap::default();
     let mut non_output_neuron_count = 0;
 
-    for i in 0..(params.layers.len() - 1) {
-        non_output_neuron_count += params.layers[i].num_neurons;
-    }
+    if !params.layers.is_empty() {
+        for i in 0..(params.layers.len() - 1) {
+            non_output_neuron_count += params.layers[i].num_neurons;
+        }
 
-    for out_channel_id in 0..params.layers.last().unwrap().num_neurons {
-        result.insert(out_channel_id + non_output_neuron_count, out_channel_id);
+        for out_channel_id in 0..params.layers.last().unwrap().num_neurons {
+            result.insert(out_channel_id + non_output_neuron_count, out_channel_id);
+        }
     }
 
     result

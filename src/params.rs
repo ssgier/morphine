@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use simple_error::SimpleError;
 
+use crate::types::HashSet;
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceParams {
     pub layers: Vec<LayerParams>,
@@ -192,7 +194,16 @@ pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), 
         validate_layer_params(layer_params)?;
     }
 
+    let mut seen_from_to_pairs = HashSet::default();
+
     for conn_params in &instance_params.layer_connections {
+        if !seen_from_to_pairs.insert((conn_params.from_layer_id, conn_params.to_layer_id)) {
+            return Err(SimpleError::new(format!(
+                "duplicate connection from layer {} to layer {}",
+                conn_params.from_layer_id, conn_params.to_layer_id
+            )));
+        }
+
         if conn_params.from_layer_id >= instance_params.layers.len() {
             return Err(SimpleError::new(format!(
                 "invalid from_layer_id: {}",
@@ -611,6 +622,23 @@ mod tests {
         assert_eq!(
             result.unwrap_err().as_str(),
             "dopamine_flush_period must be a multiple of dopamine_conflation_period"
+        );
+    }
+
+    #[test]
+    fn duplicate_connection() {
+        let mut params = test_util::get_template_instance_params();
+        params.layer_connections[0].from_layer_id = 1;
+        params.layer_connections[0].to_layer_id = 0;
+        params.layer_connections[1].from_layer_id = 1;
+        params.layer_connections[1].to_layer_id = 0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "duplicate connection from layer 1 to layer 0"
         );
     }
 
