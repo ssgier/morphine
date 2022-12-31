@@ -66,6 +66,7 @@ layer_connections:
   conduction_delay_max_random_part: 20
   conduction_delay_position_distance_scale_factor: 0.0
   conduction_delay_add_on: 0
+  allow_self_innervation: true
 - from_layer_id: 0
   to_layer_id: 1
   projection_params:
@@ -94,6 +95,7 @@ layer_connections:
   conduction_delay_max_random_part: 20
   conduction_delay_position_distance_scale_factor: 0.0
   conduction_delay_add_on: 0
+  allow_self_innervation: true
 - from_layer_id: 1
   to_layer_id: 0
   projection_params:
@@ -109,6 +111,7 @@ layer_connections:
   conduction_delay_max_random_part: 0
   conduction_delay_position_distance_scale_factor: 0.0
   conduction_delay_add_on: 0
+  allow_self_innervation: true
 - from_layer_id: 1
   to_layer_id: 1
   projection_params:
@@ -124,6 +127,7 @@ layer_connections:
   conduction_delay_max_random_part: 0
   conduction_delay_position_distance_scale_factor: 0.0
   conduction_delay_add_on: 0
+  allow_self_innervation: true
 technical_params:
   num_threads: 1
   pin_threads: false

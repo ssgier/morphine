@@ -1147,3 +1147,29 @@ fn state_snapshot() {
         }
     }
 }
+
+#[test]
+fn no_self_innervation() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 2;
+    params.layers.push(layer.clone());
+    layer.num_neurons = 5;
+    params.layers.push(layer);
+
+    let mut conn_params = LayerConnectionParams::defaults_for_layer_ids(1, 0);
+    params.layer_connections.push(conn_params.clone());
+    conn_params.to_layer_id = 1;
+    conn_params.allow_self_innervation = false;
+    params.layer_connections.push(conn_params);
+
+    let mut instance = create_instance(params).unwrap();
+
+    // currently the only way to extract synapse info is via state snapshot in the tick result
+    let tick_result = tick_extract_snapshot(&mut instance, &[]);
+    let state_snapshot = tick_result.state_snapshot.unwrap();
+
+    for synapse_state in state_snapshot.synapse_states {
+        assert_ne!(synapse_state.pre_syn_nid, synapse_state.post_syn_nid);
+    }
+}

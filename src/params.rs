@@ -28,6 +28,7 @@ pub struct LayerConnectionParams {
     pub conduction_delay_max_random_part: usize,
     pub conduction_delay_position_distance_scale_factor: f64,
     pub conduction_delay_add_on: usize,
+    pub allow_self_innervation: bool,
 }
 
 impl LayerConnectionParams {
@@ -42,6 +43,7 @@ impl LayerConnectionParams {
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 0.0,
             conduction_delay_add_on: 0,
+            allow_self_innervation: true,
         }
     }
 }

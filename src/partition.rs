@@ -91,6 +91,8 @@ pub fn create_partitions(
         let partition_range =
             util::get_partition_range(num_threads, thread_id, layer_params.num_neurons);
 
+        let nid_start = layer_nid_starts[layer_id] + partition_range.start;
+
         for _ in 0..partition_range.len() {
             neurons.push(Neuron::new());
         }
@@ -156,13 +158,19 @@ pub fn create_partitions(
                                 &mut rng,
                             );
 
-                            let synapse = Synapse::new(
-                                *to_idx - partition_range.start,
-                                conduction_delay as u8,
-                                init_weight,
-                            );
+                            let neuron_idx = *to_idx - partition_range.start;
 
-                            synapses.push(synapse);
+                            let post_syn_nid = neuron_idx + nid_start;
+                            let pre_syn_nid = from_nid;
+
+                            if pre_syn_nid != post_syn_nid
+                                || connection_params.allow_self_innervation
+                            {
+                                let synapse =
+                                    Synapse::new(neuron_idx, conduction_delay as u8, init_weight);
+
+                                synapses.push(synapse);
+                            }
                         }
                     }
 
@@ -198,7 +206,7 @@ pub fn create_partitions(
         let transmission_buffer = BatchedRingBuffer::new(batched_ring_buffer_size);
 
         let partition = Partition {
-            nid_start: layer_nid_starts[layer_id] + partition_range.start,
+            nid_start,
             nid_to_projection,
             neuron_params: layer_params.neuron_params.clone(),
             neurons,
@@ -567,6 +575,7 @@ mod tests {
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
             conduction_delay_add_on: 4,
+            allow_self_innervation: true,
         };
 
         let mut rng = StdRng::seed_from_u64(0);
@@ -613,6 +622,7 @@ mod tests {
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 2.0,
             conduction_delay_add_on: 0,
+            allow_self_innervation: true,
         };
 
         let instance_params = InstanceParams {
@@ -672,6 +682,7 @@ mod tests {
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
             conduction_delay_add_on: 0,
+            allow_self_innervation: true,
         };
 
         let mut params = InstanceParams::default();
@@ -742,6 +753,7 @@ mod tests {
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 10.0,
             conduction_delay_add_on: 5,
+            allow_self_innervation: true,
         };
 
         params.layer_connections.push(connection_params);
