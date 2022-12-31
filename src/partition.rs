@@ -1,4 +1,5 @@
 use bus::BusReader;
+use itertools::Itertools;
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
@@ -13,7 +14,7 @@ use crate::{
     plasticity_modulation::PlasticityModulator,
     short_term_plasticity::{self, ShortTermPlasticity},
     spike_coincidence::SpikeCoincidence,
-    state_snapshot::NeuronState,
+    state_snapshot::{NeuronState, SynapseState},
     synapse::Synapse,
     types::HashMap,
     util,
@@ -28,6 +29,7 @@ pub struct PartitionGroupResult {
 pub struct PartitionStateSnapshot {
     pub nid_start: usize,
     pub neuron_states: Vec<NeuronState>,
+    pub synapse_states: Vec<SynapseState>,
 }
 
 pub struct Partition {
@@ -300,9 +302,24 @@ impl Partition {
             })
             .collect();
 
+        let synapse_states = self
+            .nid_to_projection
+            .iter()
+            .sorted_by_key(|entry| entry.0) // sort by nid
+            .map(|(pre_syn_nid, projection)| {
+                projection.synapses.iter().map(|synapse| SynapseState {
+                    pre_syn_nid: *pre_syn_nid,
+                    post_syn_nid: self.nid_start + synapse.neuron_idx,
+                    weight: synapse.weight,
+                })
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+
         PartitionStateSnapshot {
             nid_start: self.nid_start,
             neuron_states,
+            synapse_states,
         }
     }
 

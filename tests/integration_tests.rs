@@ -343,14 +343,20 @@ fn simple_potentiation_long_term_stdp() {
 
     tick(&mut instance, &[0]);
     instance.tick_no_input(); // nid 1 spikes
-    tick(&mut instance, &[0]);
+    let tick_2_result = tick_extract_snapshot(&mut instance, &[0]);
+    assert_approx_eq!(
+        f32,
+        tick_2_result.state_snapshot.unwrap().synapse_states[0].weight,
+        1.1
+    );
+
     let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert!(tick_3_result.spiking_out_channel_ids.is_empty());
 
     assert_approx_eq!(
         f32,
-        tick_3_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        tick_3_result.state_snapshot.as_ref().unwrap().neuron_states[1].voltage,
         1.1 // increased psp after potentiation
     );
 }
@@ -424,8 +430,14 @@ fn simple_potentiation_short_term_stdp() {
 
     assert_approx_eq!(
         f32,
-        tick_3_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        tick_3_result.state_snapshot.as_ref().unwrap().neuron_states[1].voltage,
         1.0 + 0.1 * (-3.0f32).exp()
+    );
+
+    assert_approx_eq!(
+        f32,
+        tick_3_result.state_snapshot.unwrap().synapse_states[0].weight,
+        1.0 // unchanged long term weight
     );
 }
 
@@ -458,7 +470,32 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
     tick(&mut instance, &[1]);
 
     instance.tick_no_input_until(20);
-    tick(&mut instance, &[0]);
+    let tick_20_result = tick_extract_snapshot(&mut instance, &[0]);
+
+    assert_eq!(
+        tick_20_result
+            .state_snapshot
+            .as_ref()
+            .unwrap()
+            .synapse_states[1]
+            .pre_syn_nid,
+        0
+    );
+    assert_eq!(
+        tick_20_result
+            .state_snapshot
+            .as_ref()
+            .unwrap()
+            .synapse_states[1]
+            .post_syn_nid,
+        1
+    );
+
+    assert_approx_eq!(
+        f32,
+        tick_20_result.state_snapshot.unwrap().synapse_states[1].weight,
+        0.5 // synapse potentiated, but only once
+    );
 
     let tick_21_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
@@ -754,17 +791,25 @@ fn simple_dopamine_scenario() {
     instance.tick(&TickInput::from_reward(1.5)).unwrap();
 
     instance.tick_no_input_until(1500);
-    tick(&mut instance, &[0]);
 
-    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
+    let tick_1500_result = tick_extract_snapshot(&mut instance, &[0]);
 
     let stdp_value = 0.2; // 2 * 0.1 (two transmissions at same synapse)
     let elig_trace_value = 1.5 * (-59.0 / 1000f32).exp();
+    let expected_weight = 0.5 + 0.3 * stdp_value * elig_trace_value;
+
+    assert_approx_eq!(
+        f32,
+        tick_1500_result.state_snapshot.unwrap().synapse_states[0].weight,
+        expected_weight
+    );
+
+    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert_approx_eq!(
         f32,
         tick_1501_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.5 + 0.3 * stdp_value * elig_trace_value
+        expected_weight
     );
 }
 
@@ -1049,4 +1094,56 @@ fn zero_vs_absent_plasticity_modulation() {
         .long_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 110);
+}
+
+#[test]
+fn state_snapshot() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 5;
+    params.layers.push(layer.clone());
+    layer.num_neurons = 2;
+    params.layers.push(layer);
+
+    let mut conn_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
+    conn_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    conn_params.projection_params.synapse_params.max_weight = 1.5;
+    conn_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    params.layer_connections.push(conn_params.clone());
+    conn_params.to_layer_id = 1;
+    conn_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    params.layer_connections.push(conn_params);
+
+    let mut instance = create_instance(params).unwrap();
+    tick(&mut instance, &[0]);
+
+    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
+
+    assert_equal(tick_1_result.spiking_nids, [5, 6]);
+    assert_equal(tick_1_result.spiking_out_channel_ids, [0, 1]);
+
+    let state_snapshot = tick_1_result.state_snapshot.unwrap();
+    for i in 1..5 {
+        assert_eq!(state_snapshot.synapse_states[i].pre_syn_nid, 0);
+        assert_eq!(state_snapshot.synapse_states[i].post_syn_nid, i);
+        assert_approx_eq!(f32, state_snapshot.synapse_states[i].weight, 0.5);
+    }
+
+    for i in 25..27 {
+        assert_eq!(state_snapshot.synapse_states[i].pre_syn_nid, 0);
+        assert_eq!(state_snapshot.synapse_states[i].post_syn_nid, i - 20);
+        assert_approx_eq!(f32, state_snapshot.synapse_states[i].weight, 1.1);
+    }
+
+    for pre_syn_nid in 1..5 {
+        for post_syn_nid in 5..7 {
+            let idx = 25 + 2 * pre_syn_nid + post_syn_nid - 5;
+            assert_eq!(state_snapshot.synapse_states[idx].pre_syn_nid, pre_syn_nid);
+            assert_eq!(
+                state_snapshot.synapse_states[idx].post_syn_nid,
+                post_syn_nid
+            );
+            assert_approx_eq!(f32, state_snapshot.synapse_states[idx].weight, 1.0);
+        }
+    }
 }

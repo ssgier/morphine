@@ -219,7 +219,7 @@ impl Instance {
         }
 
         let state_snapshot = if tick_input.extract_state_snapshot {
-            Some(aggregate_state_snapshot(&partition_group_results))
+            Some(aggregate_state_snapshot(partition_group_results))
         } else {
             None
         };
@@ -299,25 +299,32 @@ impl Drop for Instance {
     }
 }
 
-fn aggregate_state_snapshot(partition_group_results: &[PartitionGroupResult]) -> StateSnapshot {
-    let neuron_states: Vec<_> = partition_group_results
-        .iter()
-        .map(|result| result.partition_state_snapshots.as_ref().unwrap())
-        .flatten()
-        .sorted_by_key(|partition_snapshot| partition_snapshot.nid_start)
-        .map(|partition_snapshot| partition_snapshot.neuron_states.iter())
-        .flatten()
-        .cloned()
-        .collect();
+fn aggregate_state_snapshot(partition_group_results: Vec<PartitionGroupResult>) -> StateSnapshot {
+    let mut neuron_states = Vec::new();
+    let mut synapse_states = Vec::new();
 
-    StateSnapshot { neuron_states }
+    let partition_snapshots_ordered = partition_group_results
+        .into_iter()
+        .map(|result| result.partition_state_snapshots.unwrap())
+        .flatten()
+        .sorted_by_key(|partition_snapshot| partition_snapshot.nid_start);
+
+    for mut partition_snapshot in partition_snapshots_ordered {
+        neuron_states.append(&mut partition_snapshot.neuron_states);
+        synapse_states.append(&mut partition_snapshot.synapse_states);
+    }
+
+    StateSnapshot {
+        neuron_states,
+        synapse_states,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::params::{LayerParams, NeuronParams};
     use crate::partition::{PartitionGroupResult, PartitionStateSnapshot};
-    use crate::state_snapshot::NeuronState;
+    use crate::state_snapshot::{NeuronState, SynapseState};
     use crate::types::HashMap;
 
     use super::*;
@@ -514,6 +521,11 @@ mod tests {
         let partition_snapshot_0 = PartitionStateSnapshot {
             nid_start: 4,
             neuron_states: vec![NeuronState { voltage: 4.0 }, NeuronState { voltage: 5.0 }],
+            synapse_states: vec![SynapseState {
+                pre_syn_nid: 0,
+                post_syn_nid: 5,
+                weight: 0.2,
+            }],
         };
 
         let partition_snapshot_1 = PartitionStateSnapshot {
@@ -523,11 +535,24 @@ mod tests {
                 NeuronState { voltage: 2.0 },
                 NeuronState { voltage: 3.0 },
             ],
+            synapse_states: vec![
+                SynapseState {
+                    pre_syn_nid: 0,
+                    post_syn_nid: 1,
+                    weight: 0.2,
+                },
+                SynapseState {
+                    pre_syn_nid: 0,
+                    post_syn_nid: 2,
+                    weight: 0.3,
+                },
+            ],
         };
 
         let partition_snapshot_2 = PartitionStateSnapshot {
             nid_start: 0,
             neuron_states: vec![NeuronState { voltage: 0.0 }],
+            synapse_states: Vec::new(),
         };
 
         let group_result_0 = PartitionGroupResult {
@@ -542,13 +567,27 @@ mod tests {
             partition_state_snapshots: Some(vec![partition_snapshot_1]),
         };
 
-        let group_results = [group_result_0, group_result_1];
+        let group_results = vec![group_result_0, group_result_1];
 
-        let state_snapshot = aggregate_state_snapshot(&group_results);
+        let state_snapshot = aggregate_state_snapshot(group_results);
 
         for (index, snapshot) in state_snapshot.neuron_states.iter().enumerate() {
             assert_approx_eq!(f32, snapshot.voltage, index as f32 * 1.0);
         }
+
+        assert_eq!(state_snapshot.synapse_states.len(), 3);
+
+        assert_eq!(state_snapshot.synapse_states[0].pre_syn_nid, 0);
+        assert_eq!(state_snapshot.synapse_states[0].post_syn_nid, 1);
+        assert_approx_eq!(f32, state_snapshot.synapse_states[0].weight, 0.2);
+
+        assert_eq!(state_snapshot.synapse_states[1].pre_syn_nid, 0);
+        assert_eq!(state_snapshot.synapse_states[1].post_syn_nid, 2);
+        assert_approx_eq!(f32, state_snapshot.synapse_states[1].weight, 0.3);
+
+        assert_eq!(state_snapshot.synapse_states[2].pre_syn_nid, 0);
+        assert_eq!(state_snapshot.synapse_states[2].post_syn_nid, 5);
+        assert_approx_eq!(f32, state_snapshot.synapse_states[2].weight, 0.2);
     }
 
     #[test]
