@@ -10,6 +10,7 @@ use bus::Bus;
 use core_affinity::CoreId;
 use itertools::Itertools;
 use num_cpus;
+use simple_error::SimpleResult;
 use simple_error::{try_with, SimpleError};
 use std::sync::mpsc::channel as mpsc_channel;
 use std::sync::mpsc::Receiver as MpscReceiver;
@@ -45,12 +46,26 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         }));
     }
 
-    let out_nid_channel_mapping = create_out_nid_channel_mapping(&params);
+    let nid_to_out_channel_id = create_out_nid_channel_mapping(&params);
 
     let broadcast_tx = Some(broadcast_tx);
 
+    let num_in_channels = if let Some(layer) = params.layers.first() {
+        layer.num_neurons
+    } else {
+        0
+    };
+
+    let num_neurons = params.layers.iter().map(|layer| layer.num_neurons).sum();
+
     Ok(Instance {
-        out_nid_channel_mapping,
+        num_in_channels,
+        num_neurons,
+        out_channel_id_to_nid: nid_to_out_channel_id
+            .iter()
+            .map(|(nid, channel)| (*channel, *nid))
+            .collect(),
+        nid_to_out_channel_id,
         spiking_nid_buffer: Vec::new(),
         broadcast_tx,
         partition_result_rx,
@@ -84,17 +99,57 @@ fn create_out_nid_channel_mapping(params: &InstanceParams) -> HashMap<usize, usi
     result
 }
 
+#[derive(Debug, Clone)]
+pub struct TickInput {
+    pub spiking_in_channel_ids: Vec<usize>,
+    pub force_spiking_out_channel_ids: Vec<usize>,
+    pub force_spiking_nids: Vec<usize>,
+    pub reward: f32,
+    pub extract_state_snapshot: bool,
+}
+
+impl TickInput {
+    pub fn new() -> Self {
+        EMPTY_TICK_INPUT.clone()
+    }
+
+    pub fn from_spiking_in_channel_ids(spiking_in_channel_ids: &[usize]) -> Self {
+        let mut result = EMPTY_TICK_INPUT.clone();
+        result
+            .spiking_in_channel_ids
+            .extend_from_slice(spiking_in_channel_ids);
+        result
+    }
+
+    pub fn from_reward(reward: f32) -> Self {
+        let mut result = EMPTY_TICK_INPUT.clone();
+        result.reward = reward;
+        result
+    }
+
+    pub fn reset(&mut self) {
+        self.spiking_in_channel_ids.clear();
+        self.force_spiking_out_channel_ids.clear();
+        self.force_spiking_nids.clear();
+        self.reward = 0.0;
+        self.extract_state_snapshot = false;
+    }
+}
+
 #[derive(Debug)]
 pub struct TickResult {
     pub t: usize,
-    pub out_spiking_channel_ids: Vec<usize>,
+    pub spiking_out_channel_ids: Vec<usize>,
     pub spiking_nids: Vec<usize>,
     pub synaptic_transmission_count: usize,
     pub state_snapshot: Option<StateSnapshot>,
 }
 
 pub struct Instance {
-    out_nid_channel_mapping: HashMap<usize, usize>,
+    num_in_channels: usize,
+    num_neurons: usize,
+    nid_to_out_channel_id: HashMap<usize, usize>,
+    out_channel_id_to_nid: HashMap<usize, usize>,
     spiking_nid_buffer: Vec<usize>,
     broadcast_tx: Option<Bus<TickContext>>,
     partition_result_rx: MpscReceiver<PartitionGroupResult>,
@@ -103,18 +158,41 @@ pub struct Instance {
     join_handles: Vec<JoinHandle<()>>,
 }
 
+static EMPTY_TICK_INPUT: TickInput = TickInput {
+    spiking_in_channel_ids: Vec::new(),
+    force_spiking_out_channel_ids: Vec::new(),
+    force_spiking_nids: Vec::new(),
+    reward: 0.0,
+    extract_state_snapshot: false,
+};
+
 impl Instance {
-    pub fn tick(
-        &mut self,
-        in_spike_channel_ids: &[usize],
-        reward: f32,
-        extract_state_snapshot: bool,
-    ) -> TickResult {
-        let spike_trigger_nids: Vec<usize> = in_spike_channel_ids.to_vec();
+    pub fn get_num_neurons(&self) -> usize {
+        self.num_neurons
+    }
+
+    pub fn get_num_in_channels(&self) -> usize {
+        self.num_in_channels
+    }
+
+    pub fn get_num_out_channels(&self) -> usize {
+        self.nid_to_out_channel_id.len()
+    }
+
+    pub fn tick(&mut self, tick_input: &TickInput) -> SimpleResult<TickResult> {
+        self.validate_tick_input(tick_input)?;
+        let mut spike_trigger_nids: Vec<usize> = tick_input.spiking_in_channel_ids.to_vec();
+        spike_trigger_nids.extend_from_slice(&tick_input.force_spiking_nids);
+        spike_trigger_nids.extend(
+            tick_input
+                .force_spiking_out_channel_ids
+                .iter()
+                .map(|channel_id| self.out_channel_id_to_nid.get(channel_id).unwrap()),
+        );
 
         let spiked_nids: Vec<_> = self.spiking_nid_buffer.drain(0..).collect();
 
-        let dopamine_amount = reward; // to be revised. There might be an indirection via dopaminergic neurons
+        let dopamine_amount = tick_input.reward; // to be revised. There might be an indirection via dopaminergic neurons
 
         let t = self.tick_period;
         let ctx = TickContext {
@@ -122,7 +200,7 @@ impl Instance {
             spike_trigger_nids,
             spiked_nids,
             dopamine_amount,
-            extract_state_snapshot,
+            extract_state_snapshot: tick_input.extract_state_snapshot,
         };
 
         self.broadcast_tx.as_mut().unwrap().broadcast(ctx);
@@ -140,7 +218,7 @@ impl Instance {
                 .extend(&partition_group_result.spiking_nids);
         }
 
-        let state_snapshot = if extract_state_snapshot {
+        let state_snapshot = if tick_input.extract_state_snapshot {
             Some(aggregate_state_snapshot(&partition_group_results))
         } else {
             None
@@ -151,22 +229,22 @@ impl Instance {
         let out_spiking_channel_ids: Vec<usize> = self
             .spiking_nid_buffer
             .iter()
-            .filter_map(|spiking_nid| self.out_nid_channel_mapping.get(spiking_nid).copied())
+            .filter_map(|spiking_nid| self.nid_to_out_channel_id.get(spiking_nid).copied())
             .collect();
 
         self.tick_period += 1;
 
-        TickResult {
-            out_spiking_channel_ids,
+        Ok(TickResult {
+            spiking_out_channel_ids: out_spiking_channel_ids,
             state_snapshot,
             spiking_nids: self.spiking_nid_buffer.clone(),
             synaptic_transmission_count,
             t,
-        }
+        })
     }
 
     pub fn tick_no_input(&mut self) -> TickResult {
-        self.tick(&[], 0.0, false)
+        self.tick(&EMPTY_TICK_INPUT).unwrap()
     }
 
     pub fn tick_no_input_until(&mut self, t: usize) {
@@ -177,6 +255,37 @@ impl Instance {
 
     pub fn get_tick_period(&self) -> usize {
         self.tick_period
+    }
+
+    fn validate_tick_input(&self, tick_input: &TickInput) -> SimpleResult<()> {
+        for in_channel_id in &tick_input.spiking_in_channel_ids {
+            if *in_channel_id >= self.num_in_channels {
+                return Err(SimpleError::new(format!(
+                    "Invalid input channel id: {}",
+                    in_channel_id
+                )));
+            }
+        }
+
+        for nid in &tick_input.force_spiking_nids {
+            if *nid >= self.num_neurons {
+                return Err(SimpleError::new(format!(
+                    "Invalid neuron id for forced spike: {}",
+                    nid
+                )));
+            }
+        }
+
+        for out_channel_id in &tick_input.force_spiking_out_channel_ids {
+            if *out_channel_id >= self.get_num_out_channels() {
+                return Err(SimpleError::new(format!(
+                    "Invalid output channel id for forced spike: {}",
+                    out_channel_id
+                )));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -213,6 +322,7 @@ mod tests {
 
     use super::*;
     use float_cmp::assert_approx_eq;
+    use itertools::assert_equal;
     use std::thread;
 
     #[test]
@@ -227,10 +337,14 @@ mod tests {
         let spiking_nid = 10;
         let spiking_out_channel_id = 11;
 
-        let out_nid_channel_mapping = HashMap::from_iter([(spiking_nid, spiking_out_channel_id)]);
+        let nid_to_out_channel_id = HashMap::from_iter([(spiking_nid, spiking_out_channel_id)]);
+        let out_channel_id_to_nid = HashMap::from_iter([(spiking_out_channel_id, spiking_nid)]);
 
         let mut instance = Instance {
-            out_nid_channel_mapping,
+            num_in_channels: 10,
+            num_neurons: 20,
+            out_channel_id_to_nid,
+            nid_to_out_channel_id,
             spiking_nid_buffer: Vec::new(),
             broadcast_tx,
             partition_result_rx,
@@ -278,11 +392,15 @@ mod tests {
             })
             .collect();
 
+        let mut tick_input = TickInput::new();
+        tick_input
+            .spiking_in_channel_ids
+            .push(spiking_in_channel_id);
+
         // first cycle
-        let spiking_in_channel_ids = [spiking_in_channel_id];
-        let tick_result = instance.tick(&spiking_in_channel_ids, 0.0, false);
+        let tick_result = instance.tick(&tick_input).unwrap();
         assert_eq!(
-            tick_result.out_spiking_channel_ids,
+            tick_result.spiking_out_channel_ids,
             [spiking_out_channel_id]
         );
         assert_eq!(instance.spiking_nid_buffer, [spiking_nid]);
@@ -290,7 +408,7 @@ mod tests {
 
         // second cycle
         let tick_result = instance.tick_no_input();
-        assert!(tick_result.out_spiking_channel_ids.is_empty());
+        assert!(tick_result.spiking_out_channel_ids.is_empty());
         assert!(instance.spiking_nid_buffer.is_empty());
         assert_eq!(instance.get_tick_period(), 2);
 
@@ -316,7 +434,13 @@ mod tests {
         }
 
         let mut instance = Instance {
-            out_nid_channel_mapping,
+            num_in_channels: 10,
+            num_neurons: 20,
+            out_channel_id_to_nid: out_nid_channel_mapping
+                .iter()
+                .map(|(nid, channel)| (*channel, *nid))
+                .collect(),
+            nid_to_out_channel_id: out_nid_channel_mapping,
             spiking_nid_buffer: Vec::new(),
             broadcast_tx,
             partition_result_rx,
@@ -346,9 +470,11 @@ mod tests {
 
         let inputs = [vec![1, 4, 5], vec![1, 3], vec![], vec![9]];
 
+        let mut tick_input = TickInput::new();
         for input in inputs {
-            let tick_result = instance.tick(&input, 0.0, false);
-            assert_eq!(tick_result.out_spiking_channel_ids, input);
+            tick_input.spiking_in_channel_ids = input.clone();
+            let tick_result = instance.tick(&tick_input).unwrap();
+            assert_eq!(tick_result.spiking_out_channel_ids, input);
         }
 
         drop(instance); // this drops the channel so the partition thread stops
@@ -423,5 +549,63 @@ mod tests {
         for (index, snapshot) in state_snapshot.neuron_states.iter().enumerate() {
             assert_approx_eq!(f32, snapshot.voltage, index as f32 * 1.0);
         }
+    }
+
+    #[test]
+    fn forced_spikes() {
+        let mut params = InstanceParams::default();
+        let mut layer = LayerParams::default();
+        layer.num_neurons = 10;
+        params.layers.push(layer.clone());
+        layer.num_neurons = 5;
+        params.layers.push(layer);
+
+        let mut instance = create_instance(params).unwrap();
+
+        let mut tick_input = TickInput::new();
+        tick_input.spiking_in_channel_ids.push(3);
+        tick_input.force_spiking_nids = vec![3, 4, 12];
+        tick_input.force_spiking_out_channel_ids.push(3);
+
+        let tick_result = instance.tick(&tick_input).unwrap();
+
+        assert_equal(tick_result.spiking_out_channel_ids, [2, 3]);
+        assert_equal(tick_result.spiking_nids, [3, 3, 4, 12, 13]);
+    }
+
+    #[test]
+    fn invalid_tick_input() {
+        let mut params = InstanceParams::default();
+        let mut layer = LayerParams::default();
+        layer.num_neurons = 10;
+        params.layers.push(layer.clone());
+        layer.num_neurons = 5;
+        params.layers.push(layer);
+
+        let mut instance = create_instance(params).unwrap();
+
+        let result = instance.tick(&TickInput::from_spiking_in_channel_ids(&[10]));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().as_str(), "Invalid input channel id: 10");
+
+        let mut tick_input = TickInput::new();
+        tick_input.force_spiking_nids.push(15);
+
+        let result = instance.tick(&tick_input);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "Invalid neuron id for forced spike: 15"
+        );
+
+        let mut tick_input = TickInput::new();
+        tick_input.force_spiking_out_channel_ids.push(5);
+
+        let result = instance.tick(&tick_input);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "Invalid output channel id for forced spike: 5"
+        );
     }
 }

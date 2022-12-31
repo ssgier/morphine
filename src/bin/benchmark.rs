@@ -1,6 +1,9 @@
 use std::time::Instant;
 
-use morphine::{instance, params::InstanceParams};
+use morphine::{
+    instance::{self, TickInput},
+    params::InstanceParams,
+};
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
@@ -144,13 +147,16 @@ fn main() {
 
     let wall_start = Instant::now();
 
+    let mut tick_input = TickInput::new();
+
     for _ in 0..t_stop {
-        let spiking_channels = all_in_channels
+        tick_input.reset();
+        tick_input.spiking_in_channel_ids = all_in_channels
             .choose_multiple(&mut rng, 5)
             .copied()
-            .collect::<Vec<_>>();
-
-        let tick_result = instance.tick(&spiking_channels, reward_dist.sample(&mut rng), false);
+            .collect();
+        tick_input.reward = reward_dist.sample(&mut rng);
+        let tick_result = instance.tick(&tick_input).unwrap();
 
         spike_count += tick_result.spiking_nids.len();
         synaptic_transmission_count += tick_result.synaptic_transmission_count;

@@ -1,7 +1,7 @@
 use float_cmp::assert_approx_eq;
 use itertools::{assert_equal, Itertools};
 use morphine::{
-    instance::{self, create_instance, Instance},
+    instance::{self, create_instance, Instance, TickInput, TickResult},
     params::{
         InitialSynWeight, InstanceParams, LayerConnectionParams, LayerParams,
         PlasticityModulationParams, ShortTermStdpParams, StdpParams, StpParams,
@@ -10,6 +10,18 @@ use morphine::{
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
+
+fn tick(instance: &mut Instance, in_channel_ids: &[usize]) -> TickResult {
+    instance
+        .tick(&TickInput::from_spiking_in_channel_ids(in_channel_ids))
+        .unwrap()
+}
+
+fn tick_extract_snapshot(instance: &mut Instance, in_channel_ids: &[usize]) -> TickResult {
+    let mut tick_input = TickInput::from_spiking_in_channel_ids(in_channel_ids);
+    tick_input.extract_state_snapshot = true;
+    instance.tick(&tick_input).unwrap()
+}
 
 fn make_simple_1_in_1_out_instance(weight: f32) -> Instance {
     let mut params = InstanceParams::default();
@@ -38,7 +50,7 @@ fn empty_instance() {
     let params = InstanceParams::default();
     let mut instance = create_instance(params).unwrap();
     let tick_0_result = instance.tick_no_input();
-    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_0_result.spiking_out_channel_ids.is_empty());
     assert!(tick_0_result.spiking_nids.is_empty());
 }
 
@@ -51,8 +63,8 @@ fn empty_output_layer() {
     layer_params.num_neurons = 0;
     params.layers.push(layer_params);
     let mut instance = create_instance(params).unwrap();
-    let tick_0_result = instance.tick(&[0], 0.0, false);
-    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    let tick_0_result = tick(&mut instance, &[0]);
+    assert!(tick_0_result.spiking_out_channel_ids.is_empty());
     assert_equal(tick_0_result.spiking_nids, [0]);
 }
 
@@ -67,12 +79,12 @@ fn single_neuron() {
     let mut instance = create_instance(params).unwrap();
 
     // t = 0: empty context, expect empty result
-    let tick_0_result = instance.tick(&[], 0.0, false);
-    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    let tick_0_result = tick(&mut instance, &[]);
+    assert!(tick_0_result.spiking_out_channel_ids.is_empty());
 
     // t = 1: input channel 0 ticks, expect output channel 0 tick
-    let tick_1_result = instance.tick(&[0], 0.0, false);
-    assert_equal(tick_1_result.out_spiking_channel_ids, [0]);
+    let tick_1_result = tick(&mut instance, &[0]);
+    assert_equal(tick_1_result.spiking_out_channel_ids, [0]);
 }
 
 #[test]
@@ -80,12 +92,12 @@ fn single_direct_mapped_output() {
     let mut instance = make_simple_1_in_1_out_instance(0.5);
 
     // double spike on nid 0 ...
-    let tick_0_result = instance.tick(&[0, 0], 0.0, false);
-    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    let tick_0_result = tick(&mut instance, &[0, 0]);
+    assert!(tick_0_result.spiking_out_channel_ids.is_empty());
 
     // ... leads to spike at nid 1 at next tick, mapped to output channel 0
     let tick_1_result = instance.tick_no_input();
-    assert_equal(tick_1_result.out_spiking_channel_ids, [0]);
+    assert_equal(tick_1_result.spiking_out_channel_ids, [0]);
 }
 
 #[test]
@@ -93,16 +105,16 @@ fn missed_spike_after_leakage() {
     let mut instance = make_simple_1_in_1_out_instance(0.5);
 
     // first spike on nid 0
-    let tick_0_result = instance.tick(&[0], 0.0, false);
-    assert!(tick_0_result.out_spiking_channel_ids.is_empty());
+    let tick_0_result = tick(&mut instance, &[0]);
+    assert!(tick_0_result.spiking_out_channel_ids.is_empty());
 
     // seconds spike on nid 0
-    let tick_1_result = instance.tick(&[0], 0.0, false);
-    assert!(tick_1_result.out_spiking_channel_ids.is_empty());
+    let tick_1_result = tick(&mut instance, &[0]);
+    assert!(tick_1_result.spiking_out_channel_ids.is_empty());
 
     // spike is missed, but voltaged is close to threshold
-    let tick_2_result = instance.tick(&[], 0.0, true);
-    assert!(tick_2_result.out_spiking_channel_ids.is_empty());
+    let tick_2_result = tick_extract_snapshot(&mut instance, &[]);
+    assert!(tick_2_result.spiking_out_channel_ids.is_empty());
 
     assert_approx_eq!(
         f32,
@@ -115,9 +127,9 @@ fn missed_spike_after_leakage() {
 fn voltage_trajectory() {
     let mut instance = make_simple_1_in_1_out_instance(0.5);
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_1_result = instance.tick(&[], 0.0, true);
+    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_1_result.state_snapshot.unwrap().neuron_states[1].voltage,
@@ -128,7 +140,7 @@ fn voltage_trajectory() {
         instance.tick_no_input();
     }
 
-    let tick_6_result = instance.tick(&[], 0.0, true);
+    let tick_6_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert_approx_eq!(
         f32,
@@ -142,18 +154,18 @@ fn no_psp_during_refractory_period() {
     let mut instance = make_simple_1_in_1_out_instance(0.5);
 
     // make neuron 1 fire one tick later
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
 
-    let tick_1_result = instance.tick(&[], 0.0, true);
+    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_1_result.state_snapshot.unwrap().neuron_states[1].voltage,
         0.0
     );
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_3_result = instance.tick(&[], 0.0, true);
+    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
 
     // neuron 1 is in refractory period
     assert_approx_eq!(
@@ -167,16 +179,16 @@ fn no_psp_during_refractory_period() {
     }
 
     // too early to cause a psp
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_10_result = instance.tick(&[0], 0.0, true);
+    let tick_10_result = tick_extract_snapshot(&mut instance, &[0]);
     assert_approx_eq!(
         f32,
         tick_10_result.state_snapshot.unwrap().neuron_states[1].voltage,
         0.0
     );
 
-    let tick_11_result = instance.tick(&[], 0.0, true);
+    let tick_11_result = tick_extract_snapshot(&mut instance, &[]);
 
     // neuron 1 is not in refractory period anymore
     assert_approx_eq!(
@@ -219,17 +231,17 @@ fn two_epsps_and_one_ipsp() {
     instance.tick_no_input(); // start with an empty tick for test diversity
 
     // double tick on channel 0
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
 
-    let tick_2_result = instance.tick(&[], 0.0, false);
+    let tick_2_result = tick(&mut instance, &[]);
 
     assert_equal(tick_2_result.spiking_nids, [1]);
-    assert_equal(tick_2_result.out_spiking_channel_ids, []);
+    assert_equal(tick_2_result.spiking_out_channel_ids, []);
 
-    let tick_3_result = instance.tick(&[], 0.0, true);
+    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert!(tick_3_result.spiking_nids.is_empty());
-    assert!(tick_3_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_3_result.spiking_out_channel_ids.is_empty());
     assert_approx_eq!(
         f32,
         tick_3_result.state_snapshot.unwrap().neuron_states[2].voltage,
@@ -260,9 +272,9 @@ fn voltage_floor() {
     let mut instance = create_instance(params).unwrap();
 
     // double tick on channel 0
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
 
-    let tick_1_result = instance.tick(&[], 0.0, true);
+    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
 
     // voltage floored at -0.6
     assert_approx_eq!(
@@ -289,23 +301,23 @@ fn threshold_adaptation() {
     let mut instance = create_instance(params).unwrap();
 
     // trigger spike in nid 1
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
 
     // nid 1 spikes, threshold drops to 0.4
     instance.tick_no_input();
 
     // now a psp of 0.5 is sufficient to spike
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     let tick_3_result = instance.tick_no_input();
-    assert_equal(tick_3_result.out_spiking_channel_ids, [0]);
+    assert_equal(tick_3_result.spiking_out_channel_ids, [0]);
 
     instance.tick_no_input();
     instance.tick_no_input();
 
     // threshold offset decayed and psp of 0.5 is not sufficient anymore
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     let tick_7_result = instance.tick_no_input();
-    assert!(tick_7_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_7_result.spiking_out_channel_ids.is_empty());
 }
 
 #[test]
@@ -329,12 +341,12 @@ fn simple_potentiation_long_term_stdp() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     instance.tick_no_input(); // nid 1 spikes
-    instance.tick(&[0], 0.0, false);
-    let tick_3_result = instance.tick(&[], 0.0, true);
+    tick(&mut instance, &[0]);
+    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
 
-    assert!(tick_3_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_3_result.spiking_out_channel_ids.is_empty());
 
     assert_approx_eq!(
         f32,
@@ -370,7 +382,7 @@ fn synaptic_transmission_count() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     let tick_1_result = instance.tick_no_input();
 
     assert_eq!(tick_1_result.synaptic_transmission_count, 15);
@@ -400,15 +412,15 @@ fn simple_potentiation_short_term_stdp() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     instance.tick_no_input(); // nid 1 spikes
     instance.tick_no_input();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_3_result = instance.tick(&[], 0.0, true);
+    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
 
-    assert!(tick_3_result.out_spiking_channel_ids.is_empty());
+    assert!(tick_3_result.spiking_out_channel_ids.is_empty());
 
     assert_approx_eq!(
         f32,
@@ -439,16 +451,16 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
     instance.tick_no_input_until(3);
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
 
     instance.tick_no_input_until(20);
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_21_result = instance.tick(&[], 0.0, true);
+    let tick_21_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_21_result.state_snapshot.unwrap().neuron_states[1].voltage,
@@ -488,19 +500,19 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
     for _tick_period in 1..5 {
         instance.tick_no_input();
     }
 
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
     instance.tick_no_input(); // psp arrives at tick 6, contributes to stdp
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
     instance.tick_no_input(); // psp arrives at tick 8, does not contribute to stdp
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
 
-    let tick_10_result = instance.tick(&[], 0.0, true);
+    let tick_10_result = tick_extract_snapshot(&mut instance, &[]);
 
     let expected_lt_stdp_value_tick_6 = -0.11 * (-6.0 / 25.0f32).exp();
     let expected_st_stdp_value_tick_6 = -0.06 * (-6.0 / 20.0f32).exp();
@@ -539,18 +551,18 @@ fn stdp_alternating_pre_post_syn_spikes() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
     instance.tick_no_input_until(8);
-    instance.tick(&[0], 0.0, false); // psp at t = 11
+    tick(&mut instance, &[0]); // psp at t = 11
     instance.tick_no_input_until(12);
-    instance.tick(&[1], 0.0, false);
+    tick(&mut instance, &[1]);
     instance.tick_no_input_until(21);
-    instance.tick(&[0], 0.0, false); // psp at t = 24
+    tick(&mut instance, &[0]); // psp at t = 24
     instance.tick_no_input_until(30);
-    instance.tick(&[0], 0.0, false); // psp at t = 33
+    tick(&mut instance, &[0]); // psp at t = 33
     instance.tick_no_input_until(33);
 
-    let tick_33_result = instance.tick(&[], 0.0, true);
+    let tick_33_result = tick_extract_snapshot(&mut instance, &[]);
 
     let tick_11_stdp = -0.11 * (-11.0 / 25.0f32).exp();
     let tick_12_stdp = 0.1 * (-1.0 / 20.0f32).exp();
@@ -589,24 +601,24 @@ fn long_term_stdp_complex_scenario() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
     instance.tick_no_input_until(8);
 
     //this spike will arrive at t = 13, after the post-synaptic spike -> depression
-    instance.tick(&[5], 0.0, false);
+    tick(&mut instance, &[5]);
 
     instance.tick_no_input_until(10);
-    instance.tick(&[9], 0.0, false);
+    tick(&mut instance, &[9]);
 
     // spikes from neuron 0 and 9 should arrive at neuron 19 (output channel 9) simultaneously
     let tick_11_result = instance.tick_no_input();
-    assert_equal(tick_11_result.out_spiking_channel_ids, [9]);
+    assert_equal(tick_11_result.spiking_out_channel_ids, [9]);
 
     instance.tick_no_input_until(25);
 
-    instance.tick(&[9], 0.0, false);
+    tick(&mut instance, &[9]);
 
-    let tick_26_result = instance.tick(&[9], 0.0, true);
+    let tick_26_result = tick_extract_snapshot(&mut instance, &[9]);
     assert_approx_eq!(
         f32,
         tick_26_result.state_snapshot.unwrap().neuron_states[19].voltage,
@@ -614,18 +626,18 @@ fn long_term_stdp_complex_scenario() {
     );
 
     // make nid 19 spike to bring it back to reset voltage
-    let tick_27_result = instance.tick(&[9], 0.0, false);
-    assert_equal(tick_27_result.out_spiking_channel_ids, [9]);
+    let tick_27_result = tick(&mut instance, &[9]);
+    assert_equal(tick_27_result.spiking_out_channel_ids, [9]);
 
     // this will cause a psp of psp due to potentiation
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
     // cause as spike at nid 19 later on to bring it back to reset voltage
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
     instance.tick_no_input_until(39);
 
-    let tick_39_result = instance.tick(&[], 0.0, true);
+    let tick_39_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert_approx_eq!(
         f32,
@@ -634,13 +646,13 @@ fn long_term_stdp_complex_scenario() {
     );
 
     let tick_40_result = instance.tick_no_input();
-    assert_equal(tick_40_result.out_spiking_channel_ids, [9]);
+    assert_equal(tick_40_result.spiking_out_channel_ids, [9]);
 
     instance.tick_no_input_until(50);
-    instance.tick(&[5], 0.0, false);
+    tick(&mut instance, &[5]);
     instance.tick_no_input_until(55);
 
-    let tick_55_result = instance.tick(&[], 0.0, true);
+    let tick_55_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_55_result.state_snapshot.unwrap().neuron_states[19].voltage,
@@ -648,17 +660,17 @@ fn long_term_stdp_complex_scenario() {
     );
 
     // again: induce spike to get back to reset voltage
-    instance.tick(&[9, 9], 0.0, false);
+    tick(&mut instance, &[9, 9]);
     let tick_57_result = instance.tick_no_input();
-    assert_equal(tick_57_result.out_spiking_channel_ids, [9]);
+    assert_equal(tick_57_result.spiking_out_channel_ids, [9]);
 
     instance.tick_no_input_until(70);
 
     // psp will arrive at t = 74
-    instance.tick(&[6], 0.0, false);
+    tick(&mut instance, &[6]);
     instance.tick_no_input_until(74);
 
-    let tick_74_result = instance.tick(&[], 0.0, true);
+    let tick_74_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_74_result.state_snapshot.unwrap().neuron_states[19].voltage,
@@ -693,12 +705,12 @@ fn no_dopamine() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
     instance.tick_no_input(); // nid 1 spikes
     instance.tick_no_input_until(1500);
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_1501_result = instance.tick(&[], 0.0, true);
+    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_1501_result.state_snapshot.unwrap().neuron_states[1].voltage,
@@ -734,17 +746,17 @@ fn simple_dopamine_scenario() {
     let mut instance = create_instance(params).unwrap();
 
     // two tick at nid 0 cause tick at nid 1 next cycle, creating an eligibility trace
-    instance.tick(&[0, 0], 0.0, false);
+    tick(&mut instance, &[0, 0]);
 
     instance.tick_no_input_until(53);
 
     // dopamine released at t = 60
-    instance.tick(&[], 1.5, false);
+    instance.tick(&TickInput::from_reward(1.5)).unwrap();
 
     instance.tick_no_input_until(1500);
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_1501_result = instance.tick(&[], 0.0, true);
+    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
 
     let stdp_value = 0.2; // 2 * 0.1 (two transmissions at same synapse)
     let elig_trace_value = 1.5 * (-59.0 / 1000f32).exp();
@@ -781,9 +793,9 @@ fn short_term_plasticity() {
 
     let mut instance = create_instance(params).unwrap();
 
-    instance.tick(&[0], 0.0, false);
+    tick(&mut instance, &[0]);
 
-    let tick_1_result = instance.tick(&[], 0.0, true);
+    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_1_result.state_snapshot.unwrap().neuron_states[2].voltage,
@@ -792,7 +804,7 @@ fn short_term_plasticity() {
 
     instance.tick_no_input_until(6);
 
-    let tick_6_result = instance.tick(&[], 0.0, true);
+    let tick_6_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_6_result.state_snapshot.unwrap().neuron_states[3].voltage,
@@ -801,8 +813,8 @@ fn short_term_plasticity() {
 
     instance.tick_no_input_until(500); // let voltages decay to near zero
 
-    instance.tick(&[1], 0.0, false);
-    let tick_8_result = instance.tick(&[], 0.0, true);
+    tick(&mut instance, &[1]);
+    let tick_8_result = tick_extract_snapshot(&mut instance, &[]);
     assert_approx_eq!(
         f32,
         tick_8_result.state_snapshot.unwrap().neuron_states[3].voltage,
@@ -812,8 +824,8 @@ fn short_term_plasticity() {
     instance.tick_no_input_until(1000);
 
     // both outgoing synapses of nid 0 are still depressed
-    instance.tick(&[0], 0.0, false);
-    let tick_1001_result = instance.tick(&[], 0.0, true);
+    tick(&mut instance, &[0]);
+    let tick_1001_result = tick_extract_snapshot(&mut instance, &[]);
 
     let expected_stp_factor = 0.8 * (1.0 - 0.6 * (-1000.0 / 800.0f32).exp());
 
@@ -825,7 +837,7 @@ fn short_term_plasticity() {
 
     instance.tick_no_input_until(1006);
 
-    let tick_1006_result = instance.tick(&[], 0.0, true);
+    let tick_1006_result = tick_extract_snapshot(&mut instance, &[]);
 
     assert_approx_eq!(
         f32,
@@ -915,25 +927,29 @@ fn assert_equivalence(instances: &mut [Instance], t_stop: usize) {
     let mut rng = StdRng::seed_from_u64(0);
     let reward_dist = Uniform::new(0.0, 0.005);
 
+    let mut tick_input = TickInput::new();
+
     for _ in 0..t_stop {
-        let spiking_channels = all_in_channels
+        tick_input.reset();
+
+        tick_input.spiking_in_channel_ids = all_in_channels
             .choose_multiple(&mut rng, 5)
             .copied()
-            .collect::<Vec<_>>();
+            .collect();
 
-        let reward = reward_dist.sample(&mut rng);
+        tick_input.reward = reward_dist.sample(&mut rng);
 
         let mut tick_results = instances
             .iter_mut()
-            .map(|instance| instance.tick(&spiking_channels, reward, false))
+            .map(|instance| instance.tick(&tick_input).unwrap())
             .collect_vec();
 
         let cmp_result = tick_results.pop().unwrap();
 
         for tick_result in tick_results {
             assert_eq!(
-                tick_result.out_spiking_channel_ids,
-                cmp_result.out_spiking_channel_ids
+                tick_result.spiking_out_channel_ids,
+                cmp_result.spiking_out_channel_ids
             );
             assert_eq!(tick_result.spiking_nids, cmp_result.spiking_nids);
             assert_eq!(
