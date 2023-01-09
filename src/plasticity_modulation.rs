@@ -395,6 +395,25 @@ mod tests {
     }
 
     #[test]
+    fn negative_dopamine_amount() {
+        let mut params = PlasticityModulationParams::default();
+        params.dopamine_conflation_period = 1;
+        params.dopamine_flush_period = 1;
+        params.eligibility_trace_delay = 0;
+        params.dopamine_modulation_factor = 1.0;
+        params.tau_eligibility_trace = 10.0;
+
+        let mut sut = PlasticityModulator::new(params);
+
+        sut.tick(0);
+        sut.process_stdp_value(0, 0, 0, 2.0);
+        sut.process_dopamine(-1.0);
+
+        let events = tick_unwrap(&mut sut, 1);
+        assert_approx_eq!(f32, events[0].weight_change, -2.0 * (-0.1f32).exp());
+    }
+
+    #[test]
     fn complex_scenario() {
         // testing a complex scenario against manually calculated values
 

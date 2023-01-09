@@ -756,6 +756,43 @@ fn no_dopamine() {
 }
 
 #[test]
+fn negative_reward() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 1;
+    params.layers.push(layer.clone());
+    let mut plasticity_modulation_params = PlasticityModulationParams::default();
+    plasticity_modulation_params.dopamine_conflation_period = 1;
+    plasticity_modulation_params.dopamine_flush_period = 1;
+    plasticity_modulation_params.tau_eligibility_trace = 15.0;
+    layer.plasticity_modulation_params = Some(plasticity_modulation_params);
+    params.layers.push(layer);
+
+    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_params
+        .projection_params
+        .synapse_params
+        .max_weight = 1.5;
+    connection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    params.layer_connections.push(connection_params);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0]);
+    tick(&mut instance, &[]);
+
+    let mut tick_input = TickInput::from_reward(-1.0);
+    tick_input.extract_state_snapshot = true;
+    let tick_result = instance.tick(&tick_input).unwrap();
+
+    let expected_depression = 0.1 * (-1.0 / 15.0f32).exp();
+
+    let synapse_states = tick_result.state_snapshot.unwrap().synapse_states;
+    assert_approx_eq!(f32, synapse_states[0].weight, 1.0 - expected_depression);
+}
+
+#[test]
 fn simple_dopamine_scenario() {
     let mut params = InstanceParams::default();
     let mut layer = LayerParams::default();

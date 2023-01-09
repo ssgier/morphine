@@ -3,7 +3,8 @@ use itertools::Itertools;
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
-use std::sync::mpsc::Sender as MpscSender;
+use std::hash::{Hash, Hasher};
+use std::{collections::hash_map::DefaultHasher, sync::mpsc::Sender as MpscSender};
 
 use crate::{
     batched_ring_buffer::BatchedRingBuffer,
@@ -82,7 +83,8 @@ pub fn create_partitions(
         next_layer_nid_start += layer_params.num_neurons;
     }
 
-    let mut rng = StdRng::seed_from_u64(0);
+    let seed = params.technical_params.seed_override.unwrap_or(0);
+    let mut rng = StdRng::seed_from_u64(seed);
 
     for (layer_id, layer_params) in params.layers.iter().enumerate() {
         let mut nid_to_projection = HashMap::default();
@@ -145,7 +147,16 @@ pub fn create_partitions(
 
                             let position_distance = (to_pos - from_pos).abs();
 
-                            let mut rng = StdRng::seed_from_u64((from_idx ^ to_idx) as u64);
+                            let neuron_idx = *to_idx - partition_range.start;
+
+                            let post_syn_nid = neuron_idx + nid_start;
+                            let pre_syn_nid = from_nid;
+
+                            let mut rng = StdRng::seed_from_u64(calculate_hash(&(
+                                seed,
+                                pre_syn_nid,
+                                post_syn_nid,
+                            )));
 
                             let conduction_delay = compute_conduction_delay(
                                 &connection_params,
@@ -157,11 +168,6 @@ pub fn create_partitions(
                                 &connection_params.initial_syn_weight,
                                 &mut rng,
                             );
-
-                            let neuron_idx = *to_idx - partition_range.start;
-
-                            let post_syn_nid = neuron_idx + nid_start;
-                            let pre_syn_nid = from_nid;
 
                             if pre_syn_nid != post_syn_nid
                                 || connection_params.allow_self_innervation
@@ -219,6 +225,12 @@ pub fn create_partitions(
     }
 
     partitions
+}
+
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
 }
 
 fn compute_initial_weight(init_syn_weight: &InitialSynWeight, rng: &mut StdRng) -> f32 {
@@ -318,6 +330,7 @@ impl Partition {
                 projection.synapses.iter().map(|synapse| SynapseState {
                     pre_syn_nid: *pre_syn_nid,
                     post_syn_nid: self.nid_start + synapse.neuron_idx,
+                    conduction_delay: synapse.conduction_delay,
                     weight: synapse.weight,
                 })
             })

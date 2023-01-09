@@ -117,6 +117,7 @@ pub struct NeuronParams {
 pub struct TechnicalParams {
     pub num_threads: Option<usize>,
     pub pin_threads: bool,
+    pub seed_override: Option<u64>,
 }
 
 impl Default for LayerParams {
@@ -148,6 +149,7 @@ impl Default for TechnicalParams {
         Self {
             num_threads: Some(1),
             pin_threads: false,
+            seed_override: None,
         }
     }
 }

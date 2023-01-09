@@ -524,6 +524,7 @@ mod tests {
             synapse_states: vec![SynapseState {
                 pre_syn_nid: 0,
                 post_syn_nid: 5,
+                conduction_delay: 3,
                 weight: 0.2,
             }],
         };
@@ -539,11 +540,13 @@ mod tests {
                 SynapseState {
                     pre_syn_nid: 0,
                     post_syn_nid: 1,
+                    conduction_delay: 1,
                     weight: 0.2,
                 },
                 SynapseState {
                     pre_syn_nid: 0,
                     post_syn_nid: 2,
+                    conduction_delay: 2,
                     weight: 0.3,
                 },
             ],
@@ -579,14 +582,17 @@ mod tests {
 
         assert_eq!(state_snapshot.synapse_states[0].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[0].post_syn_nid, 1);
+        assert_eq!(state_snapshot.synapse_states[0].conduction_delay, 1);
         assert_approx_eq!(f32, state_snapshot.synapse_states[0].weight, 0.2);
 
         assert_eq!(state_snapshot.synapse_states[1].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[1].post_syn_nid, 2);
+        assert_eq!(state_snapshot.synapse_states[1].conduction_delay, 2);
         assert_approx_eq!(f32, state_snapshot.synapse_states[1].weight, 0.3);
 
         assert_eq!(state_snapshot.synapse_states[2].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[2].post_syn_nid, 5);
+        assert_eq!(state_snapshot.synapse_states[2].conduction_delay, 3);
         assert_approx_eq!(f32, state_snapshot.synapse_states[2].weight, 0.2);
     }
 
