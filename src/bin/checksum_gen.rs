@@ -7,7 +7,7 @@ mod scenario_params;
 fn main() {
     let mut instance = instance::create_instance(scenario_params::get_scenario_params()).unwrap();
 
-    let stimulation_nids: Vec<usize> = (0..800).collect();
+    let stimulation_nids: Vec<usize> = (0..1000).collect();
     let mut rng = StdRng::seed_from_u64(0);
     let reward = 0.002;
 
@@ -20,8 +20,8 @@ fn main() {
 
     for _ in 0..t_stop {
         tick_input.reset();
-        tick_input.spiking_in_channel_ids = stimulation_nids
-            .choose_multiple(&mut rng, 5)
+        tick_input.force_spiking_nids = stimulation_nids
+            .choose_multiple(&mut rng, 10)
             .copied()
             .collect();
         tick_input.reward = reward;
@@ -64,8 +64,10 @@ fn main() {
     let mut syn_state_checksum = 0.0;
 
     for syn_state in state_snapshot.synapse_states {
-        syn_state_checksum +=
-            syn_state.pre_syn_nid as f64 * syn_state.post_syn_nid as f64 * syn_state.weight as f64;
+        syn_state_checksum += syn_state.pre_syn_nid as f64
+            * syn_state.post_syn_nid as f64
+            * syn_state.conduction_delay as f64
+            * syn_state.weight as f64;
     }
 
     let spiking_nid_checksum: usize = tick_result.spiking_nids.iter().sum();
