@@ -4,6 +4,7 @@ use morphine::instance::{self, TickInput};
 use rand::{
     distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
 };
+use statrs::distribution::Poisson;
 
 #[path = "../scenario_params.rs"]
 mod scenario_params;
@@ -22,12 +23,16 @@ fn main() {
 
     let wall_start = Instant::now();
 
+    let num_stimulus_spikes_dist = Poisson::new(5.0).unwrap();
+
     let mut tick_input = TickInput::new();
 
     for _ in 0..t_stop {
+        let num_stimulus_spikes = num_stimulus_spikes_dist.sample(&mut rng) as usize;
+
         tick_input.reset();
         tick_input.spiking_in_channel_ids = all_in_channels
-            .choose_multiple(&mut rng, 5)
+            .choose_multiple(&mut rng, num_stimulus_spikes)
             .copied()
             .collect();
         tick_input.reward = reward_dist.sample(&mut rng);
