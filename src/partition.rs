@@ -567,6 +567,7 @@ pub struct TickContext {
 #[cfg(test)]
 mod tests {
     use crate::{
+        instance::Instance,
         params::{LayerParams, TechnicalParams},
         types::HashSet,
     };
@@ -861,5 +862,43 @@ mod tests {
             assert!(partitions[2].nid_to_projection.contains_key(&nid));
             assert_eq!(partitions[2].nid_to_projection[&nid].synapses.len(), 1);
         }
+    }
+
+    #[test]
+    fn zero_connect_width() {
+        let mut params = InstanceParams::default();
+        let mut layer = LayerParams::default();
+        layer.num_neurons = 5;
+        params.layers.push(layer.clone());
+        layer.num_neurons = 3;
+        params.layers.push(layer);
+
+        let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+        connection.connect_width = 0.0;
+        connection.connect_density = 1.0;
+
+        params.layer_connections.push(connection);
+
+        let partitions = create_partitions(1, 0, &params);
+
+        assert_eq!(partitions[1].nid_to_projection.len(), 3);
+
+        assert_eq!(partitions[1].nid_to_projection[&0].synapses.len(), 1);
+        assert_eq!(
+            partitions[1].nid_to_projection[&0].synapses[0].neuron_idx,
+            0
+        );
+
+        assert_eq!(partitions[1].nid_to_projection[&2].synapses.len(), 1);
+        assert_eq!(
+            partitions[1].nid_to_projection[&2].synapses[0].neuron_idx,
+            1
+        );
+
+        assert_eq!(partitions[1].nid_to_projection[&4].synapses.len(), 1);
+        assert_eq!(
+            partitions[1].nid_to_projection[&4].synapses[0].neuron_idx,
+            2
+        );
     }
 }

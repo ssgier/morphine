@@ -234,7 +234,7 @@ fn validate_layer_params(layer_params: &LayerParams) -> Result<(), SimpleError> 
     validate_neuron_params(&layer_params.neuron_params)?;
 
     if let Some(plasticity_modulation_params) = &layer_params.plasticity_modulation_params {
-        validate_plasticity_modulation_params(&plasticity_modulation_params)?;
+        validate_plasticity_modulation_params(plasticity_modulation_params)?;
     }
 
     Ok(())
@@ -249,8 +249,8 @@ fn validate_connection_params(
         return Err(SimpleError::new("connect_density must be in (0, 1]"));
     }
 
-    if connection_params.connect_width <= 0.0 || connection_params.connect_width > 2.0 {
-        return Err(SimpleError::new("connect_width must be in (0, 2]"));
+    if connection_params.connect_width < 0.0 || connection_params.connect_width > 2.0 {
+        return Err(SimpleError::new("connect_width must be in [0, 2]"));
     }
 
     match connection_params.initial_syn_weight {
@@ -697,16 +697,16 @@ mod tests {
     }
 
     #[test]
-    fn zero_connect_width() {
+    fn negative_connect_width() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].connect_width = 0.0;
+        params.layer_connections[0].connect_width = -0.1;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
 
         assert_eq!(
             result.unwrap_err().as_str(),
-            "connect_width must be in (0, 2]"
+            "connect_width must be in [0, 2]"
         );
     }
 
@@ -720,7 +720,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().as_str(),
-            "connect_width must be in (0, 2]"
+            "connect_width must be in [0, 2]"
         );
     }
 
