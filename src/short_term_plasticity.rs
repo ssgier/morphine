@@ -2,6 +2,7 @@ use crate::{params::StpParams, util::get_decay_factor};
 
 pub trait ShortTermPlasticity {
     fn on_pre_syn_spike_get_value(&mut self, t: usize) -> f32;
+    fn reset_ephemeral_state(&mut self);
 }
 
 pub fn create(std_params: &StpParams) -> Box<dyn ShortTermPlasticity + Send> {
@@ -52,6 +53,8 @@ impl ShortTermPlasticity for Constant {
     fn on_pre_syn_spike_get_value(&mut self, _t: usize) -> f32 {
         1.0
     }
+
+    fn reset_ephemeral_state(&mut self) {}
 }
 
 impl ShortTermPlasticity for Depression {
@@ -63,6 +66,10 @@ impl ShortTermPlasticity for Depression {
         self.last_t = t;
         value
     }
+
+    fn reset_ephemeral_state(&mut self) {
+        self.last_value = self.p0;
+    }
 }
 
 impl ShortTermPlasticity for Facilitation {
@@ -73,6 +80,10 @@ impl ShortTermPlasticity for Facilitation {
         self.last_value = value_after_transmission;
         self.last_t = t;
         value
+    }
+
+    fn reset_ephemeral_state(&mut self) {
+        self.last_value = self.p0;
     }
 }
 

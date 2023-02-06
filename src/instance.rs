@@ -79,7 +79,7 @@ fn get_num_threads(params: &InstanceParams) -> usize {
     params
         .technical_params
         .num_threads
-        .unwrap_or_else(|| num_cpus::get())
+        .unwrap_or_else(num_cpus::get)
 }
 
 fn create_out_nid_channel_mapping(params: &InstanceParams) -> HashMap<usize, usize> {
@@ -106,11 +106,24 @@ pub struct TickInput {
     pub force_spiking_nids: Vec<usize>,
     pub reward: f32,
     pub extract_state_snapshot: bool,
+    pub reset_ephemeral_state: bool,
+}
+
+impl Default for TickInput {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TickInput {
     pub fn new() -> Self {
         EMPTY_TICK_INPUT.clone()
+    }
+
+    pub fn ephemeral_state_reset() -> Self {
+        let mut result = EMPTY_TICK_INPUT.clone();
+        result.reset_ephemeral_state = true;
+        result
     }
 
     pub fn from_spiking_in_channel_ids(spiking_in_channel_ids: &[usize]) -> Self {
@@ -128,11 +141,7 @@ impl TickInput {
     }
 
     pub fn reset(&mut self) {
-        self.spiking_in_channel_ids.clear();
-        self.force_spiking_out_channel_ids.clear();
-        self.force_spiking_nids.clear();
-        self.reward = 0.0;
-        self.extract_state_snapshot = false;
+        *self = EMPTY_TICK_INPUT.clone();
     }
 }
 
@@ -164,6 +173,7 @@ static EMPTY_TICK_INPUT: TickInput = TickInput {
     force_spiking_nids: Vec::new(),
     reward: 0.0,
     extract_state_snapshot: false,
+    reset_ephemeral_state: false,
 };
 
 impl Instance {
@@ -181,6 +191,11 @@ impl Instance {
 
     pub fn tick(&mut self, tick_input: &TickInput) -> SimpleResult<TickResult> {
         self.validate_tick_input(tick_input)?;
+
+        if tick_input.reset_ephemeral_state {
+            self.spiking_nid_buffer.clear();
+        }
+
         let mut spike_trigger_nids: Vec<usize> = tick_input.spiking_in_channel_ids.to_vec();
         spike_trigger_nids.extend_from_slice(&tick_input.force_spiking_nids);
         spike_trigger_nids.extend(
@@ -201,6 +216,7 @@ impl Instance {
             spiked_nids,
             dopamine_amount,
             extract_state_snapshot: tick_input.extract_state_snapshot,
+            reset_ephemeral_state: tick_input.reset_ephemeral_state,
         };
 
         self.broadcast_tx.as_mut().unwrap().broadcast(ctx);
@@ -305,8 +321,7 @@ fn aggregate_state_snapshot(partition_group_results: Vec<PartitionGroupResult>) 
 
     let partition_snapshots_ordered = partition_group_results
         .into_iter()
-        .map(|result| result.partition_state_snapshots.unwrap())
-        .flatten()
+        .flat_map(|result| result.partition_state_snapshots.unwrap())
         .sorted_by_key(|partition_snapshot| partition_snapshot.nid_start);
 
     for mut partition_snapshot in partition_snapshots_ordered {
@@ -322,6 +337,10 @@ fn aggregate_state_snapshot(partition_group_results: Vec<PartitionGroupResult>) 
 
 #[cfg(test)]
 mod tests {
+    use crate::params::{
+        InitialSynWeight, LayerConnectionParams, PlasticityModulationParams, ShortTermStdpParams,
+        StdpParams, StpParams,
+    };
     use crate::params::{LayerParams, NeuronParams};
     use crate::partition::{PartitionGroupResult, PartitionStateSnapshot};
     use crate::state_snapshot::{NeuronState, SynapseState};
@@ -520,21 +539,45 @@ mod tests {
     fn state_snapshot_aggregation() {
         let partition_snapshot_0 = PartitionStateSnapshot {
             nid_start: 4,
-            neuron_states: vec![NeuronState { voltage: 4.0 }, NeuronState { voltage: 5.0 }],
+            neuron_states: vec![
+                NeuronState {
+                    voltage: 4.0,
+                    threshold: 4.0,
+                    is_refractory: false,
+                },
+                NeuronState {
+                    voltage: 5.0,
+                    threshold: 5.0,
+                    is_refractory: false,
+                },
+            ],
             synapse_states: vec![SynapseState {
                 pre_syn_nid: 0,
                 post_syn_nid: 5,
                 conduction_delay: 3,
                 weight: 0.2,
+                short_term_stdp_offset: 0.2,
             }],
         };
 
         let partition_snapshot_1 = PartitionStateSnapshot {
             nid_start: 1,
             neuron_states: vec![
-                NeuronState { voltage: 1.0 },
-                NeuronState { voltage: 2.0 },
-                NeuronState { voltage: 3.0 },
+                NeuronState {
+                    voltage: 1.0,
+                    threshold: 1.0,
+                    is_refractory: false,
+                },
+                NeuronState {
+                    voltage: 2.0,
+                    threshold: 2.0,
+                    is_refractory: false,
+                },
+                NeuronState {
+                    voltage: 3.0,
+                    threshold: 3.0,
+                    is_refractory: false,
+                },
             ],
             synapse_states: vec![
                 SynapseState {
@@ -542,19 +585,25 @@ mod tests {
                     post_syn_nid: 1,
                     conduction_delay: 1,
                     weight: 0.2,
+                    short_term_stdp_offset: 0.2,
                 },
                 SynapseState {
                     pre_syn_nid: 0,
                     post_syn_nid: 2,
                     conduction_delay: 2,
                     weight: 0.3,
+                    short_term_stdp_offset: 0.3,
                 },
             ],
         };
 
         let partition_snapshot_2 = PartitionStateSnapshot {
             nid_start: 0,
-            neuron_states: vec![NeuronState { voltage: 0.0 }],
+            neuron_states: vec![NeuronState {
+                voltage: 0.0,
+                threshold: 0.5,
+                is_refractory: false,
+            }],
             synapse_states: Vec::new(),
         };
 
@@ -575,7 +624,14 @@ mod tests {
         let state_snapshot = aggregate_state_snapshot(group_results);
 
         for (index, snapshot) in state_snapshot.neuron_states.iter().enumerate() {
-            assert_approx_eq!(f32, snapshot.voltage, index as f32 * 1.0);
+            let expected_value = index as f32;
+            assert_approx_eq!(f32, snapshot.voltage, expected_value);
+
+            if index == 0 {
+                assert_approx_eq!(f32, snapshot.threshold, 0.5);
+            } else {
+                assert_approx_eq!(f32, snapshot.threshold, expected_value);
+            }
         }
 
         assert_eq!(state_snapshot.synapse_states.len(), 3);
@@ -584,16 +640,31 @@ mod tests {
         assert_eq!(state_snapshot.synapse_states[0].post_syn_nid, 1);
         assert_eq!(state_snapshot.synapse_states[0].conduction_delay, 1);
         assert_approx_eq!(f32, state_snapshot.synapse_states[0].weight, 0.2);
+        assert_approx_eq!(
+            f32,
+            state_snapshot.synapse_states[0].short_term_stdp_offset,
+            0.2
+        );
 
         assert_eq!(state_snapshot.synapse_states[1].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[1].post_syn_nid, 2);
         assert_eq!(state_snapshot.synapse_states[1].conduction_delay, 2);
         assert_approx_eq!(f32, state_snapshot.synapse_states[1].weight, 0.3);
+        assert_approx_eq!(
+            f32,
+            state_snapshot.synapse_states[1].short_term_stdp_offset,
+            0.3
+        );
 
         assert_eq!(state_snapshot.synapse_states[2].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[2].post_syn_nid, 5);
         assert_eq!(state_snapshot.synapse_states[2].conduction_delay, 3);
         assert_approx_eq!(f32, state_snapshot.synapse_states[2].weight, 0.2);
+        assert_approx_eq!(
+            f32,
+            state_snapshot.synapse_states[2].short_term_stdp_offset,
+            0.2
+        );
     }
 
     #[test]
@@ -652,5 +723,107 @@ mod tests {
             result.unwrap_err().as_str(),
             "Invalid output channel id for forced spike: 5"
         );
+    }
+
+    #[test]
+    fn ephemeral_state_reset() {
+        let mut params = InstanceParams::default();
+
+        let mut layer = LayerParams::default();
+
+        layer.num_neurons = 1;
+        params.layers.push(layer.clone());
+        layer.neuron_params.refractory_period = 10;
+        layer.neuron_params.adaptation_threshold = 2.0;
+        layer.neuron_params.reset_voltage = 0.8;
+        let mut plasticity_modulation_params = PlasticityModulationParams::default();
+        plasticity_modulation_params.dopamine_conflation_period = 100;
+        plasticity_modulation_params.dopamine_flush_period = 200;
+        layer.plasticity_modulation_params = Some(plasticity_modulation_params);
+        params.layers.push(layer);
+
+        let mut last_layer = LayerParams::default();
+        last_layer.num_neurons = 1;
+        params.layers.push(last_layer);
+
+        let mut layer_connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+
+        layer_connection.projection_params.stp_params = StpParams::Depression {
+            tau: 500.0,
+            p0: 0.5,
+            factor: 0.5,
+        };
+
+        layer_connection.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+            tau: 500.0,
+            stdp_params: StdpParams::default(),
+        });
+
+        layer_connection.projection_params.long_term_stdp_params = Some(StdpParams::default());
+        layer_connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+        layer_connection.projection_params.synapse_params.max_weight = 1.0;
+        layer_connection.conduction_delay_add_on = 1;
+
+        params.layer_connections.push(layer_connection);
+
+        let mut last_layer_connection = LayerConnectionParams::defaults_for_layer_ids(1, 2);
+        last_layer_connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+        params.layer_connections.push(last_layer_connection);
+
+        let mut instance = create_instance(params).unwrap();
+
+        let mut tick_input = TickInput::default();
+        tick_input.force_spiking_nids = vec![0];
+        instance.tick(&tick_input).unwrap();
+        instance.tick_no_input();
+        tick_input.force_spiking_nids = vec![1];
+        instance.tick(&tick_input).unwrap();
+
+        let mut tick_input = TickInput::ephemeral_state_reset();
+        tick_input.extract_state_snapshot = true;
+        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+        assert!(!state_snapshot.neuron_states[1].is_refractory);
+        assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
+        assert_approx_eq!(f32, state_snapshot.neuron_states[1].threshold, 1.0);
+        assert_approx_eq!(
+            f32,
+            state_snapshot.synapse_states[0].short_term_stdp_offset,
+            0.0
+        );
+
+        tick_input.reset();
+        tick_input.reward = 1.0;
+        instance.tick(&tick_input).unwrap();
+        instance.tick_no_input_until(210);
+
+        tick_input.reset();
+        tick_input.force_spiking_nids = vec![0];
+        instance.tick(&tick_input).unwrap();
+        instance.tick_no_input();
+        tick_input.reset();
+        tick_input.extract_state_snapshot = true;
+        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+
+        assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.25);
+
+        tick_input.reset();
+        tick_input.force_spiking_nids = vec![0];
+        instance.tick(&tick_input).unwrap();
+        instance.tick_no_input();
+
+        // check that the transmission buffer gets cleared as well
+        tick_input.reset();
+        tick_input.reset_ephemeral_state = true;
+        tick_input.extract_state_snapshot = true;
+        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+        assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
+
+        tick_input.reset();
+        tick_input.force_spiking_nids = vec![1];
+        instance.tick(&tick_input).unwrap();
+        tick_input.reset();
+        tick_input.reset_ephemeral_state = true;
+        let tick_result = instance.tick(&tick_input).unwrap();
+        assert!(tick_result.spiking_nids.is_empty());
     }
 }

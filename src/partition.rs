@@ -313,12 +313,36 @@ impl Partition {
         }
     }
 
+    fn reset_ephemeral_state(&mut self, t: usize) {
+        for neuron in self.neurons.iter_mut() {
+            neuron.reset_ephemeral_state(t);
+        }
+
+        for projection in self.nid_to_projection.values_mut() {
+            projection.stp.reset_ephemeral_state();
+            projection.last_pre_syn_spike_t = None;
+            projection.next_to_last_pre_syn_spike_t = None;
+
+            for synapse in projection.synapses.iter_mut() {
+                synapse.reset_ephemeral_state(t);
+            }
+        }
+
+        if let Some(modulator) = &mut self.plasticity_modulator {
+            modulator.reset_ephemeral_state();
+        }
+
+        self.transmission_buffer.clear();
+    }
+
     fn extract_state_snapshot(&self, ctx: &TickContext) -> PartitionStateSnapshot {
         let neuron_states = self
             .neurons
             .iter()
             .map(|neuron| NeuronState {
                 voltage: neuron.get_voltage(ctx.t, &self.neuron_params),
+                threshold: neuron.get_threshold(ctx.t, &self.neuron_params),
+                is_refractory: neuron.is_refractory(ctx.t),
             })
             .collect();
 
@@ -326,15 +350,25 @@ impl Partition {
             .nid_to_projection
             .iter()
             .sorted_by_key(|entry| entry.0) // sort by nid
-            .map(|(pre_syn_nid, projection)| {
-                projection.synapses.iter().map(|synapse| SynapseState {
-                    pre_syn_nid: *pre_syn_nid,
-                    post_syn_nid: self.nid_start + synapse.neuron_idx,
-                    conduction_delay: synapse.conduction_delay,
-                    weight: synapse.weight,
+            .flat_map(|(pre_syn_nid, projection)| {
+                projection.synapses.iter().map(|synapse| {
+                    let short_term_stdp_offset = if let Some(short_term_stdp_params) =
+                        &projection.prj_params.short_term_stdp_params
+                    {
+                        synapse.get_short_term_stdp_offset(ctx.t, short_term_stdp_params.tau)
+                    } else {
+                        0.0
+                    };
+
+                    SynapseState {
+                        pre_syn_nid: *pre_syn_nid,
+                        post_syn_nid: self.nid_start + synapse.neuron_idx,
+                        conduction_delay: synapse.conduction_delay,
+                        weight: synapse.weight,
+                        short_term_stdp_offset,
+                    }
                 })
             })
-            .flatten()
             .collect::<Vec<_>>();
 
         PartitionStateSnapshot {
@@ -350,9 +384,13 @@ impl Partition {
         spiking_nids: &mut Vec<usize>,
         synaptic_transmission_count: &mut usize,
     ) {
+        if ctx.reset_ephemeral_state {
+            self.reset_ephemeral_state(ctx.t);
+        }
+
         self.process_modulated_plasticity(ctx.t, ctx.dopamine_amount);
         if ctx.t > 0 {
-            self.process_spikes(&ctx);
+            self.process_spikes(ctx);
         }
         self.process_transmission_events(ctx.t, synaptic_transmission_count);
         spiking_nids.extend(self.check_for_spikes(ctx));
@@ -562,12 +600,12 @@ pub struct TickContext {
     pub spiked_nids: Vec<usize>,
     pub dopamine_amount: f32,
     pub extract_state_snapshot: bool,
+    pub reset_ephemeral_state: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        instance::Instance,
         params::{LayerParams, TechnicalParams},
         types::HashSet,
     };

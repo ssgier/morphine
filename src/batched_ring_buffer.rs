@@ -47,6 +47,10 @@ impl<T: Clone> BatchedRingBuffer<T> {
         }
         self.batch_buffers[pos].drain(..)
     }
+
+    pub fn clear(&mut self) {
+        self.batch_buffers.iter_mut().for_each(Vec::clear);
+    }
 }
 
 #[cfg(test)]

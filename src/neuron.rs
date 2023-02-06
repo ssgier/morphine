@@ -109,7 +109,15 @@ impl Neuron {
         )
     }
 
-    fn is_refractory(&self, t: usize) -> bool {
+    pub fn reset_ephemeral_state(&mut self, t: usize) {
+        self.last_t = t;
+        self.last_spike_t = None;
+        self.last_threshold = 1.0;
+        self.last_voltage = 0.0;
+        self.spike_coincidence_detector.reset_ephemeral_state();
+    }
+
+    pub fn is_refractory(&self, t: usize) -> bool {
         self.last_t > t
     }
 
@@ -121,6 +129,15 @@ impl Neuron {
         } else {
             let decay_factor_voltage = get_decay_factor(t, self.last_t, neuron_params.tau_membrane);
             adjusted_last_voltage * decay_factor_voltage
+        }
+    }
+
+    pub fn get_threshold(&self, t: usize, neuron_params: &NeuronParams) -> f32 {
+        if self.last_t >= t {
+            self.last_threshold
+        } else {
+            let decay_factor = get_decay_factor(t, self.last_t, neuron_params.tau_threshold);
+            1.0 + (self.last_threshold - 1.0) * decay_factor
         }
     }
 }
@@ -284,11 +301,14 @@ mod tests {
         let mut sut = Neuron::new();
 
         assert_approx_eq!(f32, sut.last_threshold, 1.0);
+        assert_approx_eq!(f32, sut.get_threshold(0, &params), 1.0);
         sut.spike(0, &params);
         assert_approx_eq!(f32, sut.last_threshold, 2.0);
+        assert_approx_eq!(f32, sut.get_threshold(0, &params), 2.0);
 
-        assert!(!sut.apply_psp(20, 1.0, 0, 0, &params).might_spike);
         let expected_threshold = 1.0 + (-10.0 / 100f32).exp();
+        assert_approx_eq!(f32, sut.get_threshold(20, &params), expected_threshold);
+        assert!(!sut.apply_psp(20, 1.0, 0, 0, &params).might_spike);
         assert_approx_eq!(f32, sut.last_threshold, expected_threshold);
 
         assert!(

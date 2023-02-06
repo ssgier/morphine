@@ -9,6 +9,8 @@ pub struct StateSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NeuronState {
     pub voltage: f32,
+    pub threshold: f32,
+    pub is_refractory: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,4 +19,5 @@ pub struct SynapseState {
     pub post_syn_nid: usize,
     pub conduction_delay: u8,
     pub weight: f32,
+    pub short_term_stdp_offset: f32,
 }

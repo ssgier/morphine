@@ -93,6 +93,10 @@ impl DopamineBufferItem {
             scaled_amount: 0.0,
         }
     }
+
+    fn reset(&mut self) {
+        self.scaled_amount = 0.0;
+    }
 }
 
 impl PlasticityModulator {
@@ -158,6 +162,14 @@ impl PlasticityModulator {
         } else {
             None
         }
+    }
+
+    pub fn reset_ephemeral_state(&mut self) {
+        self.elig_traces.clear();
+        self.dopamine_buffer
+            .iter_mut()
+            .for_each(DopamineBufferItem::reset);
+        self.pending_dopamine_buffer_item.reset();
     }
 
     fn drain_stale_elig_traces(&mut self, t: usize) {
@@ -411,6 +423,35 @@ mod tests {
 
         let events = tick_unwrap(&mut sut, 1);
         assert_approx_eq!(f32, events[0].weight_change, -2.0 * (-0.1f32).exp());
+    }
+
+    #[test]
+    fn ephemeral_state_reset() {
+        let mut params = PlasticityModulationParams::default();
+        params.dopamine_conflation_period = 10;
+        params.dopamine_flush_period = 20;
+        params.eligibility_trace_delay = 0;
+        params.dopamine_modulation_factor = 1.0;
+        let mut sut = PlasticityModulator::new(params);
+        sut.tick(0);
+        sut.process_stdp_value(0, 0, 0, 1.0);
+        sut.process_dopamine(1.0);
+
+        for t in 1..12 {
+            sut.tick(t);
+        }
+
+        sut.process_stdp_value(11, 0, 0, 1.0);
+        sut.process_dopamine(1.0);
+
+        sut.reset_ephemeral_state();
+
+        assert!(sut.elig_traces.is_empty());
+        for buffer_item in &sut.dopamine_buffer {
+            assert_approx_eq!(f32, buffer_item.scaled_amount, 0.0);
+        }
+
+        assert_approx_eq!(f32, sut.pending_dopamine_buffer_item.scaled_amount, 0.0);
     }
 
     #[test]

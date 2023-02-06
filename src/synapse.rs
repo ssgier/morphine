@@ -49,9 +49,18 @@ impl Synapse {
         self.short_term_stdp_offset += stdp_value;
     }
 
-    fn update(&mut self, t: usize, short_term_stdp_tau: f32) {
+    pub fn reset_ephemeral_state(&mut self, t: usize) {
+        self.short_term_stdp_offset = 0.0;
+        self.last_t = t;
+    }
+
+    pub fn get_short_term_stdp_offset(&self, t: usize, short_term_stdp_tau: f32) -> f32 {
         let decay_factor = get_decay_factor(t, self.last_t, short_term_stdp_tau);
-        self.short_term_stdp_offset *= decay_factor;
+        self.short_term_stdp_offset * decay_factor
+    }
+
+    fn update(&mut self, t: usize, short_term_stdp_tau: f32) {
+        self.short_term_stdp_offset = self.get_short_term_stdp_offset(t, short_term_stdp_tau);
         self.last_t = t;
     }
 }

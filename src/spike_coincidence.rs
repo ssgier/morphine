@@ -61,6 +61,10 @@ impl SpikeCoincidenceDetector {
             })
     }
 
+    pub fn reset_ephemeral_state(&mut self) {
+        self.recent_pre_syn_spikes.clear();
+    }
+
     fn discard_stale(&mut self, t: usize, t_cutoff: usize) {
         while let Some(oldest_spike) = self.recent_pre_syn_spikes.front() {
             if oldest_spike.t_transmission + t_cutoff < t {
