@@ -106,8 +106,12 @@ pub fn create_partitions(
 
         if let Some(connection_params_elements) = to_layer_id_to_conn_params.get(&layer_id) {
             for connection_params in connection_params_elements.iter() {
-                let from_num_neurons = params.layers[connection_params.from_layer_id].num_neurons;
                 let to_num_neurons = params.layers[connection_params.to_layer_id].num_neurons;
+                if to_num_neurons == 0 {
+                    continue;
+                }
+
+                let from_num_neurons = params.layers[connection_params.from_layer_id].num_neurons;
 
                 let from_positions = get_positions_1d(from_num_neurons);
                 let to_positions = get_positions_1d(to_num_neurons);

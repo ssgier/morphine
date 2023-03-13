@@ -211,6 +211,20 @@ pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), 
         validate_layer_params(layer_params)?;
     }
 
+    if !instance_params.layers.is_empty() {
+        for layer_params in instance_params
+            .layers
+            .iter()
+            .take(instance_params.layers.len() - 1)
+        {
+            if layer_params.num_neurons == 0 {
+                return Err(SimpleError::new(
+                    "num_neurons must be strictly positive in non-output layers",
+                ));
+            }
+        }
+    }
+
     let mut seen_from_to_pairs = HashSet::default();
 
     for conn_params in &instance_params.layer_connections {
@@ -467,6 +481,27 @@ mod tests {
     #[test]
     fn valid_params() {
         let params = test_util::get_template_instance_params();
+        assert!(validate_instance_params(&params).is_ok());
+    }
+
+    #[test]
+    fn empty_non_output_layer() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[0].num_neurons = 0;
+        let result = validate_instance_params(&params);
+
+        assert!(result.is_err());
+
+        assert_eq!(
+            result.unwrap_err().as_str(),
+            "num_neurons must be strictly positive in non-output layers"
+        );
+    }
+
+    #[test]
+    fn empty_output_layer() {
+        let mut params = test_util::get_template_instance_params();
+        params.layers[1].num_neurons = 0;
         assert!(validate_instance_params(&params).is_ok());
     }
 
