@@ -4,6 +4,7 @@ use simple_error::SimpleError;
 use crate::types::HashSet;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstanceParams {
     pub layers: Vec<LayerParams>,
     pub layer_connections: Vec<LayerConnectionParams>,
@@ -11,6 +12,7 @@ pub struct InstanceParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayerParams {
     pub num_neurons: usize,
     pub neuron_params: NeuronParams,
@@ -18,6 +20,7 @@ pub struct LayerParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayerConnectionParams {
     pub from_layer_id: usize,
     pub to_layer_id: usize,
@@ -49,6 +52,7 @@ impl LayerConnectionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectionParams {
     pub synapse_params: SynapseParams,
     pub stp_params: StpParams,
@@ -57,18 +61,21 @@ pub struct ProjectionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum InitialSynWeight {
     Randomized(f32),
     Constant(f32),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SynapseParams {
     pub max_weight: f32,
     pub weight_scale_factor: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum StpParams {
     NoStp,
     Depression { tau: f32, p0: f32, factor: f32 },
@@ -76,6 +83,7 @@ pub enum StpParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StdpParams {
     pub factor_pre_before_post: f32,
     pub tau_pre_before_post: f32,
@@ -84,12 +92,14 @@ pub struct StdpParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShortTermStdpParams {
     pub stdp_params: StdpParams,
     pub tau: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlasticityModulationParams {
     pub tau_eligibility_trace: f32,
     pub eligibility_trace_delay: usize,
@@ -100,9 +110,11 @@ pub struct PlasticityModulationParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DopamineBufferingParams {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NeuronParams {
     pub tau_membrane: f32,
     pub refractory_period: u8,
@@ -114,6 +126,7 @@ pub struct NeuronParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TechnicalParams {
     pub num_threads: Option<usize>,
     pub pin_threads: bool,
