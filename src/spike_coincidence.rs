@@ -9,7 +9,7 @@ pub struct SpikeCoincidence {
 
 #[derive(Debug, Default, Clone)]
 pub struct SpikeCoincidenceDetector {
-    recent_pre_syn_spikes: VecDeque<PreSynSpike>, // TODO: SmallVec?
+    recent_pre_syn_spikes: VecDeque<PreSynSpike>,
 }
 
 impl SpikeCoincidenceDetector {
@@ -42,11 +42,11 @@ impl SpikeCoincidenceDetector {
         }
     }
 
-    pub fn on_post_syn_spike<'a>(
-        &'a mut self,
+    pub fn on_post_syn_spike(
+        &mut self,
         t: usize,
         t_cutoff: usize,
-    ) -> impl Iterator<Item = SpikeCoincidence> + 'a {
+    ) -> impl Iterator<Item = SpikeCoincidence> + '_ {
         self.discard_stale(t, t_cutoff);
 
         self.recent_pre_syn_spikes

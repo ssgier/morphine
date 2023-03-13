@@ -115,9 +115,8 @@ pub fn create_partitions(
                 let to_delta = 1.0 / ((to_num_neurons - 1) as f64);
                 let to_indexes = Vec::from_iter(0..to_num_neurons);
 
-                for from_idx in 0..from_num_neurons {
+                for (from_idx, from_pos) in from_positions.iter().enumerate() {
                     let from_nid = layer_nid_starts[connection_params.from_layer_id] + from_idx;
-                    let from_pos = from_positions[from_idx];
 
                     let to_pos_lower_bound = from_pos - 0.5 * connection_params.connect_width;
                     let to_pos_upper_bound = from_pos + 0.5 * connection_params.connect_width;
@@ -159,7 +158,7 @@ pub fn create_partitions(
                             )));
 
                             let conduction_delay = compute_conduction_delay(
-                                &connection_params,
+                                connection_params,
                                 position_distance,
                                 &mut rng,
                             );
@@ -173,7 +172,7 @@ pub fn create_partitions(
                                 || connection_params.allow_self_innervation
                             {
                                 let synapse =
-                                    Synapse::new(neuron_idx, conduction_delay as u8, init_weight);
+                                    Synapse::new(neuron_idx, conduction_delay, init_weight);
 
                                 synapses.push(synapse);
                             }
@@ -201,8 +200,7 @@ pub fn create_partitions(
 
         let max_conduction_delay = nid_to_projection
             .values()
-            .map(|projection| projection.synapses.iter())
-            .flatten()
+            .flat_map(|projection| projection.synapses.iter())
             .map(|synapse| synapse.conduction_delay)
             .max()
             .unwrap_or(0);

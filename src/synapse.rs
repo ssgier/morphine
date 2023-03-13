@@ -39,9 +39,7 @@ impl Synapse {
     }
 
     pub fn process_weight_change(&mut self, weight_change: f32, syn_params: &SynapseParams) {
-        self.weight = (self.weight + weight_change)
-            .max(0.0)
-            .min(syn_params.max_weight);
+        self.weight = (self.weight + weight_change).clamp(0.0, syn_params.max_weight);
     }
 
     pub fn process_short_term_stdp(&mut self, t: usize, stdp_value: f32, short_term_stdp_tau: f32) {

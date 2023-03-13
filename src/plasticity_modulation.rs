@@ -63,7 +63,7 @@ impl<'a> PlasticityEvents<'a> {
                     .dopamine_buffer
                     .iter()
                     .map(|dopamine_buffer_item| {
-                        self.get_weight_change_contrib(dopamine_buffer_item, &elig_trace)
+                        self.get_weight_change_contrib(dopamine_buffer_item, elig_trace)
                     })
                     .sum();
 
@@ -73,9 +73,11 @@ impl<'a> PlasticityEvents<'a> {
                     synapse_idx: elig_trace.synapse_idx,
                 }
             })
-            .filter(|event| match event.weight_change.partial_cmp(&0.0f32) {
-                Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Less) => true,
-                _ => false,
+            .filter(|event| {
+                matches!(
+                    event.weight_change.partial_cmp(&0.0f32),
+                    Some(std::cmp::Ordering::Greater) | Some(std::cmp::Ordering::Less)
+                )
             })
     }
 }

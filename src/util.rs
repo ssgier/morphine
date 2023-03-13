@@ -181,7 +181,6 @@ pub mod test_util {
     technical_params:
       num_threads: 1
       pin_threads: false
-      batched_ring_buffer_size: 21
     "#;
 
         serde_yaml::from_str(params_yaml_str).unwrap()

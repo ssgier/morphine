@@ -417,7 +417,7 @@ fn validate_stp_params_inner(tau: f32, p0: f32, factor: f32) -> Result<(), Simpl
         ));
     }
 
-    if p0 < 0.0 || p0 > 1.0 {
+    if !(0.0..=1.0).contains(&p0) {
         return Err(SimpleError::new("stp_params: p0 must be in [0, 1]"));
     }
 
