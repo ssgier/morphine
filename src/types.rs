@@ -1,4 +1,9 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 pub type HashMap<K, V> = FxHashMap<K, V>;
-pub type HashSet<K> = FxHashSet<K>;
+#[cfg(test)]
+pub mod tests {
+    use rustc_hash::FxHashSet;
+
+    pub type HashSet<K> = FxHashSet<K>;
+}

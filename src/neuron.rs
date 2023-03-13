@@ -1,7 +1,7 @@
 use crate::{
     params::NeuronParams,
     spike_coincidence::{SpikeCoincidence, SpikeCoincidenceDetector},
-    util::get_decay_factor,
+    util::{get_decay_factor, SynapseCoordinate},
 };
 
 #[derive(Debug, Clone)]
@@ -41,15 +41,13 @@ impl Neuron {
         &mut self,
         t: usize,
         psp: f32,
-        pre_syn_nid: usize,
-        syn_idx: usize,
+        syn_coord: &SynapseCoordinate,
         neuron_params: &NeuronParams,
     ) -> ApplyPspResult {
         let spike_coincidence = self.spike_coincidence_detector.on_psp(
             t,
             self.last_spike_t,
-            pre_syn_nid,
-            syn_idx,
+            syn_coord,
             neuron_params.t_cutoff_coincidence,
         );
 
@@ -148,6 +146,12 @@ mod tests {
     use super::*;
     use float_cmp::assert_approx_eq;
 
+    const SYN_COORD: SynapseCoordinate = SynapseCoordinate {
+        pre_syn_nid: 0,
+        projection_idx: 0,
+        synapse_idx: 0,
+    };
+
     fn params() -> NeuronParams {
         NeuronParams {
             tau_membrane: 10.0,
@@ -165,13 +169,13 @@ mod tests {
         let params = params();
         let mut sut = Neuron::new();
 
-        let psp_result = sut.apply_psp(4, 0.5, 0, 0, &params);
+        let psp_result = sut.apply_psp(4, 0.5, &SYN_COORD, &params);
         assert!(!psp_result.might_spike);
         assert_eq!(sut.last_t, 4);
         assert_eq!(sut.last_spike_t, None);
         assert_approx_eq!(f32, sut.last_voltage, 0.5);
 
-        let psp_result = sut.apply_psp(14, 0.5, 0, 0, &params);
+        let psp_result = sut.apply_psp(14, 0.5, &SYN_COORD, &params);
         assert!(!psp_result.might_spike);
         assert_eq!(sut.last_t, 14);
         assert_eq!(sut.last_spike_t, None);
@@ -183,9 +187,9 @@ mod tests {
         let params = params();
         let mut sut = Neuron::new();
 
-        sut.apply_psp(4, 0.5, 0, 0, &params);
+        sut.apply_psp(4, 0.5, &SYN_COORD, &params);
 
-        let psp_result = sut.apply_psp(14, 0.9, 0, 0, &params);
+        let psp_result = sut.apply_psp(14, 0.9, &SYN_COORD, &params);
 
         assert!(psp_result.might_spike);
         assert_eq!(sut.last_t, 14);
@@ -205,9 +209,9 @@ mod tests {
         let params = params();
         let mut sut = Neuron::new();
 
-        sut.apply_psp(4, 0.5, 0, 0, &params);
+        sut.apply_psp(4, 0.5, &SYN_COORD, &params);
 
-        let psp_result = sut.apply_psp(4, 0.5, 0, 0, &params);
+        let psp_result = sut.apply_psp(4, 0.5, &SYN_COORD, &params);
 
         assert!(psp_result.might_spike);
         assert_eq!(sut.last_t, 4);
@@ -226,7 +230,7 @@ mod tests {
     fn check_spike_no_duplicate() {
         let params = params();
         let mut sut = Neuron::new();
-        sut.apply_psp(1, 1.0, 0, 0, &params);
+        sut.apply_psp(1, 1.0, &SYN_COORD, &params);
 
         assert!(sut.check_spike(1, &params).is_some());
         assert!(sut.check_spike(1, &params).is_none());
@@ -236,8 +240,15 @@ mod tests {
     fn spike_coincidence_pre_then_post() {
         let params = params();
         let mut sut = Neuron::new();
+
+        let syn_coord = SynapseCoordinate {
+            pre_syn_nid: 0,
+            projection_idx: 1,
+            synapse_idx: 2,
+        };
+
         assert!(sut
-            .apply_psp(4, 0.5, 0, 1, &params)
+            .apply_psp(4, 0.5, &syn_coord, &params)
             .spike_coincidence
             .is_none());
 
@@ -246,8 +257,7 @@ mod tests {
         assert_eq!(
             spike.0.collect::<Vec<_>>(),
             vec![SpikeCoincidence {
-                pre_syn_nid: 0,
-                syn_idx: 1,
+                syn_coord,
                 t_pre_minus_post: -2
             }]
         )
@@ -262,12 +272,11 @@ mod tests {
         assert!(spike.0.next().is_none());
         drop(spike);
 
-        let psp_result = sut.apply_psp(5, 0.1, 0, 1, &params);
+        let psp_result = sut.apply_psp(5, 0.1, &SYN_COORD, &params);
         assert_eq!(
             psp_result.spike_coincidence,
             Some(SpikeCoincidence {
-                pre_syn_nid: 0,
-                syn_idx: 1,
+                syn_coord: SYN_COORD,
                 t_pre_minus_post: 4
             })
         );
@@ -278,15 +287,14 @@ mod tests {
         let params = params();
         let mut sut = Neuron::new();
 
-        assert!(sut.apply_psp(1, 1.0, 0, 1, &params).might_spike);
+        assert!(sut.apply_psp(1, 1.0, &SYN_COORD, &params).might_spike);
 
         let spike = sut.check_spike(1, &params);
 
         assert_eq!(
             spike.unwrap().0.collect::<Vec<_>>(),
             vec![SpikeCoincidence {
-                pre_syn_nid: 0,
-                syn_idx: 1,
+                syn_coord: SYN_COORD,
                 t_pre_minus_post: 0
             }]
         );
@@ -308,11 +316,11 @@ mod tests {
 
         let expected_threshold = 1.0 + (-10.0 / 100f32).exp();
         assert_approx_eq!(f32, sut.get_threshold(20, &params), expected_threshold);
-        assert!(!sut.apply_psp(20, 1.0, 0, 0, &params).might_spike);
+        assert!(!sut.apply_psp(20, 1.0, &SYN_COORD, &params).might_spike);
         assert_approx_eq!(f32, sut.last_threshold, expected_threshold);
 
         assert!(
-            sut.apply_psp(20, expected_threshold - 1.0, 0, 0, &params)
+            sut.apply_psp(20, expected_threshold - 1.0, &SYN_COORD, &params)
                 .might_spike
         )
     }
@@ -324,18 +332,18 @@ mod tests {
         params.tau_membrane = 1000.0;
         let mut sut = Neuron::new();
 
-        sut.apply_psp(1, -0.4, 0, 0, &params);
+        sut.apply_psp(1, -0.4, &SYN_COORD, &params);
         assert_approx_eq!(f32, sut.get_voltage(1, &params), -0.4);
-        sut.apply_psp(1, -0.4, 0, 0, &params);
+        sut.apply_psp(1, -0.4, &SYN_COORD, &params);
 
         // epsp too small to lift above floor
-        sut.apply_psp(1, 0.1, 0, 0, &params);
+        sut.apply_psp(1, 0.1, &SYN_COORD, &params);
 
         // raw voltage is not yet floor-adjusted
         assert_approx_eq!(f32, sut.last_voltage, -0.7);
         assert_approx_eq!(f32, sut.get_voltage(1, &params), -0.5);
 
-        sut.apply_psp(2, 0.0, 0, 0, &params);
+        sut.apply_psp(2, 0.0, &SYN_COORD, &params);
 
         // now raw voltage should have been retroactively adjusted
         let expected_voltage = -0.5 * (-1.0 / 1000.0f32).exp();
@@ -348,9 +356,9 @@ mod tests {
         let params = params();
         let mut sut = Neuron::new();
 
-        sut.apply_psp(4, 0.5, 0, 0, &params);
-        sut.apply_psp(4, 0.6, 0, 0, &params);
-        sut.apply_psp(4, -0.2, 0, 0, &params);
+        sut.apply_psp(4, 0.5, &SYN_COORD, &params);
+        sut.apply_psp(4, 0.6, &SYN_COORD, &params);
+        sut.apply_psp(4, -0.2, &SYN_COORD, &params);
 
         assert_eq!(sut.last_t, 4);
         assert_eq!(sut.last_spike_t, None);
