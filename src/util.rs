@@ -40,6 +40,13 @@ pub fn get_partition_range(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SynapseCoordinate {
+    pub pre_syn_nid: usize,
+    pub projection_idx: usize,
+    pub synapse_idx: usize,
+}
+
 #[cfg(test)]
 pub mod test_util {
     use float_cmp::{assert_approx_eq, ApproxEq};

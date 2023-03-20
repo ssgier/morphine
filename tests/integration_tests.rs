@@ -1004,10 +1004,16 @@ fn get_scenario_template_params() -> InstanceParams {
     params
 }
 
-fn assert_equivalence(instances: &mut [Instance], t_stop: usize) {
-    let all_in_channels: Vec<usize> = (0..800).collect();
+fn assert_equivalence(
+    instances: &mut [Instance],
+    t_stop: usize,
+    with_reward: bool,
+    compare_synapse_states: bool,
+    compare_syn_transmission_counts: bool,
+) {
+    let all_in_channels: Vec<usize> = (0..instances[0].get_num_in_channels()).collect();
     let mut rng = StdRng::seed_from_u64(0);
-    let reward_dist = Uniform::new(0.0, 0.005);
+    let reward_dist = Uniform::new(0.0, 0.05);
 
     let mut tick_input = TickInput::new();
 
@@ -1019,7 +1025,9 @@ fn assert_equivalence(instances: &mut [Instance], t_stop: usize) {
             .copied()
             .collect();
 
-        tick_input.reward = reward_dist.sample(&mut rng);
+        if with_reward {
+            tick_input.reward = reward_dist.sample(&mut rng);
+        }
 
         let mut tick_results = instances
             .iter_mut()
@@ -1034,10 +1042,61 @@ fn assert_equivalence(instances: &mut [Instance], t_stop: usize) {
                 cmp_result.spiking_out_channel_ids
             );
             assert_eq!(tick_result.spiking_nids, cmp_result.spiking_nids);
-            assert_eq!(
-                tick_result.synaptic_transmission_count,
-                cmp_result.synaptic_transmission_count
-            );
+            if compare_syn_transmission_counts {
+                assert_eq!(
+                    tick_result.synaptic_transmission_count,
+                    cmp_result.synaptic_transmission_count
+                );
+            }
+        }
+    }
+    tick_input.reset();
+    tick_input.extract_state_snapshot = true;
+
+    let mut tick_results = instances
+        .iter_mut()
+        .map(|instance| instance.tick(&tick_input).unwrap())
+        .collect_vec();
+
+    let cmp_result = tick_results.pop().unwrap();
+    let cmp_state_snapshot = cmp_result.state_snapshot.unwrap();
+
+    for tick_result in tick_results {
+        let state_snapshot = tick_result.state_snapshot.unwrap();
+        for (neuron_state, cmp_neuron_state) in state_snapshot
+            .neuron_states
+            .iter()
+            .zip(cmp_state_snapshot.neuron_states.iter())
+        {
+            assert_approx_eq!(f32, neuron_state.voltage, cmp_neuron_state.voltage);
+            assert_approx_eq!(f32, neuron_state.threshold, cmp_neuron_state.threshold);
+            assert_eq!(neuron_state.is_refractory, cmp_neuron_state.is_refractory);
+        }
+
+        if compare_synapse_states {
+            let syn_states = state_snapshot
+                .synapse_states
+                .iter()
+                .sorted_unstable_by_key(|ss| (ss.pre_syn_nid, ss.post_syn_nid))
+                .collect_vec();
+
+            let cmp_syn_states = cmp_state_snapshot
+                .synapse_states
+                .iter()
+                .sorted_unstable_by_key(|ss| (ss.pre_syn_nid, ss.post_syn_nid))
+                .collect_vec();
+
+            for (syn_state, cmp_syn_state) in syn_states.iter().zip(cmp_syn_states.iter()) {
+                assert_eq!(syn_state.pre_syn_nid, cmp_syn_state.pre_syn_nid);
+                assert_eq!(syn_state.post_syn_nid, cmp_syn_state.post_syn_nid);
+                assert_eq!(syn_state.conduction_delay, cmp_syn_state.conduction_delay);
+                assert_approx_eq!(f32, syn_state.weight, cmp_syn_state.weight);
+                assert_approx_eq!(
+                    f32,
+                    syn_state.short_term_stdp_offset,
+                    cmp_syn_state.short_term_stdp_offset
+                );
+            }
         }
     }
 }
@@ -1054,7 +1113,39 @@ fn invariance_partitioning_buffering() {
         instances.push(instance::create_instance(params).unwrap());
     }
 
-    assert_equivalence(&mut instances, 102);
+    assert_equivalence(&mut instances, 102, true, true, true);
+}
+
+#[test]
+fn invariance_zero_effect_projection() {
+    let mut params = get_scenario_template_params();
+    params.layers[0].num_neurons = 80;
+    params.layers[1].num_neurons = 20;
+    for conn in params.layer_connections.iter_mut() {
+        conn.initial_syn_weight = InitialSynWeight::Constant(0.5);
+        conn.connect_density = 1.0;
+        conn.conduction_delay_max_random_part = 0;
+    }
+
+    let mut params_zero_effect_projections = params.clone();
+
+    for (idx, conn_params) in params.layer_connections.iter().enumerate() {
+        let mut zero_effect_conn = &mut params_zero_effect_projections.layer_connections[idx];
+        zero_effect_conn.initial_syn_weight = InitialSynWeight::Constant(0.0);
+        let mut projection_params = &mut zero_effect_conn.projection_params;
+        projection_params.long_term_stdp_params = None;
+        projection_params.short_term_stdp_params = None;
+        params_zero_effect_projections
+            .layer_connections
+            .push(conn_params.clone());
+    }
+
+    let mut instances = vec![
+        instance::create_instance(params).unwrap(),
+        instance::create_instance(params_zero_effect_projections).unwrap(),
+    ];
+
+    assert_equivalence(&mut instances, 120, true, false, false);
 }
 
 #[test]
@@ -1084,7 +1175,7 @@ fn zero_vs_absent_long_term_stdp() {
         .projection_params
         .long_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
-    assert_equivalence(&mut instances, 100);
+    assert_equivalence(&mut instances, 100, true, true, true);
 }
 
 #[test]
@@ -1117,7 +1208,7 @@ fn zero_vs_absent_short_term_stdp() {
         .projection_params
         .short_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
-    assert_equivalence(&mut instances, 100);
+    assert_equivalence(&mut instances, 100, true, true, true);
 }
 
 #[test]
@@ -1130,7 +1221,7 @@ fn zero_vs_absent_plasticity_modulation() {
         .projection_params
         .long_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
-    assert_equivalence(&mut instances, 110);
+    assert_equivalence(&mut instances, 110, false, true, true);
 }
 
 #[test]
@@ -1209,4 +1300,74 @@ fn no_self_innervation() {
     for synapse_state in state_snapshot.synapse_states {
         assert_ne!(synapse_state.pre_syn_nid, synapse_state.post_syn_nid);
     }
+}
+
+#[test]
+fn multiple_projections_same_layer_pair() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 3;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut conn = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    conn.initial_syn_weight = InitialSynWeight::Constant(0.5);
+
+    conn.connect_width = 0.0;
+    conn.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    params.layer_connections.push(conn.clone());
+
+    conn.connect_width = 2.0;
+    let mut stdp_params_modified = STDP_PARAMS.clone();
+    stdp_params_modified.factor_pre_before_post = 0.2;
+    conn.projection_params.long_term_stdp_params = Some(stdp_params_modified);
+    params.layer_connections.push(conn.clone());
+
+    conn.connect_width = 0.0;
+    conn.projection_params.long_term_stdp_params = None;
+    conn.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+        stdp_params: STDP_PARAMS,
+        tau: 500.0,
+    });
+
+    params.layer_connections.push(conn);
+
+    let mut instance = create_instance(params).unwrap();
+
+    let mut tick_input = TickInput::default();
+    tick_input.force_spiking_nids.push(1);
+
+    instance.tick(&tick_input).unwrap();
+
+    tick_input.reset();
+    tick_input.force_spiking_nids.push(4);
+    instance.tick(&tick_input).unwrap();
+
+    instance.tick_no_input_until(50);
+
+    let syn_states_from_1 = tick_extract_snapshot(&mut instance, &[])
+        .state_snapshot
+        .unwrap()
+        .synapse_states
+        .into_iter()
+        .filter(|syn_state| syn_state.pre_syn_nid == 1)
+        .collect_vec();
+
+    assert_eq!(syn_states_from_1.len(), 5);
+
+    assert_approx_eq!(f32, syn_states_from_1[0].weight, 0.6);
+    assert_approx_eq!(f32, syn_states_from_1[0].short_term_stdp_offset, 0.0);
+
+    assert_eq!(syn_states_from_1[2].post_syn_nid, 4);
+    assert_approx_eq!(f32, syn_states_from_1[2].weight, 0.7);
+    assert_approx_eq!(f32, syn_states_from_1[2].short_term_stdp_offset, 0.0);
+
+    assert_eq!(syn_states_from_1[4].post_syn_nid, 4);
+    assert_approx_eq!(f32, syn_states_from_1[4].weight, 0.5);
+    assert_approx_eq!(
+        f32,
+        syn_states_from_1[4].short_term_stdp_offset,
+        0.1 * (-49f32 / 500.0).exp()
+    );
 }

@@ -6,6 +6,7 @@ use rand::{
 use std::hash::{Hash, Hasher};
 use std::{collections::hash_map::DefaultHasher, sync::mpsc::Sender as MpscSender};
 
+use crate::util::SynapseCoordinate;
 use crate::{
     batched_ring_buffer::BatchedRingBuffer,
     neuron::Neuron,
@@ -35,7 +36,7 @@ pub struct PartitionStateSnapshot {
 
 pub struct Partition {
     nid_start: usize,
-    nid_to_projection: HashMap<usize, Projection>,
+    nid_to_projections: HashMap<usize, Vec<Projection>>,
     neuron_params: NeuronParams,
     neurons: Vec<Neuron>,
     neuron_indexes_to_check: Vec<usize>,
@@ -54,8 +55,7 @@ struct Projection {
 #[derive(Debug, Clone)]
 struct TransmissionEvent {
     neuron_idx: usize,
-    pre_syn_nid: usize,
-    syn_idx: usize,
+    syn_coord: SynapseCoordinate,
     psp: f32,
 }
 
@@ -87,7 +87,7 @@ pub fn create_partitions(
     let mut rng = StdRng::seed_from_u64(seed);
 
     for (layer_id, layer_params) in params.layers.iter().enumerate() {
-        let mut nid_to_projection = HashMap::default();
+        let mut nid_to_projections = HashMap::default();
         let mut neurons = Vec::new();
 
         let partition_range =
@@ -196,15 +196,22 @@ pub fn create_partitions(
                             next_to_last_pre_syn_spike_t: None,
                         };
 
-                        nid_to_projection.insert(from_nid, projection);
+                        nid_to_projections
+                            .entry(from_nid)
+                            .or_insert_with(Vec::default)
+                            .push(projection);
                     }
                 }
             }
         }
 
-        let max_conduction_delay = nid_to_projection
+        let max_conduction_delay = nid_to_projections
             .values()
-            .flat_map(|projection| projection.synapses.iter())
+            .flat_map(|projections| {
+                projections
+                    .iter()
+                    .flat_map(|projection| projection.synapses.iter())
+            })
             .map(|synapse| synapse.conduction_delay)
             .max()
             .unwrap_or(0);
@@ -215,7 +222,7 @@ pub fn create_partitions(
 
         let partition = Partition {
             nid_start,
-            nid_to_projection,
+            nid_to_projections,
             neuron_params: layer_params.neuron_params.clone(),
             neurons,
             neuron_indexes_to_check: Vec::new(),
@@ -320,7 +327,11 @@ impl Partition {
             neuron.reset_ephemeral_state(t);
         }
 
-        for projection in self.nid_to_projection.values_mut() {
+        for projection in self
+            .nid_to_projections
+            .values_mut()
+            .flat_map(|prj| prj.iter_mut())
+        {
             projection.stp.reset_ephemeral_state();
             projection.last_pre_syn_spike_t = None;
             projection.next_to_last_pre_syn_spike_t = None;
@@ -349,26 +360,28 @@ impl Partition {
             .collect();
 
         let synapse_states = self
-            .nid_to_projection
+            .nid_to_projections
             .iter()
             .sorted_by_key(|entry| entry.0) // sort by nid
-            .flat_map(|(pre_syn_nid, projection)| {
-                projection.synapses.iter().map(|synapse| {
-                    let short_term_stdp_offset = if let Some(short_term_stdp_params) =
-                        &projection.prj_params.short_term_stdp_params
-                    {
-                        synapse.get_short_term_stdp_offset(ctx.t, short_term_stdp_params.tau)
-                    } else {
-                        0.0
-                    };
+            .flat_map(|(pre_syn_nid, projections)| {
+                projections.iter().flat_map(|projection| {
+                    projection.synapses.iter().map(|synapse| {
+                        let short_term_stdp_offset = if let Some(short_term_stdp_params) =
+                            &projection.prj_params.short_term_stdp_params
+                        {
+                            synapse.get_short_term_stdp_offset(ctx.t, short_term_stdp_params.tau)
+                        } else {
+                            0.0
+                        };
 
-                    SynapseState {
-                        pre_syn_nid: *pre_syn_nid,
-                        post_syn_nid: self.nid_start + synapse.neuron_idx,
-                        conduction_delay: synapse.conduction_delay,
-                        weight: synapse.weight,
-                        short_term_stdp_offset,
-                    }
+                        SynapseState {
+                            pre_syn_nid: *pre_syn_nid,
+                            post_syn_nid: self.nid_start + synapse.neuron_idx,
+                            conduction_delay: synapse.conduction_delay,
+                            weight: synapse.weight,
+                            short_term_stdp_offset,
+                        }
+                    })
                 })
             })
             .collect::<Vec<_>>();
@@ -408,9 +421,14 @@ impl Partition {
             plasticity_modulator.process_dopamine(dopamine_amount);
             if let Some(plasticity_events) = plasticity_modulator.tick(t) {
                 for event in plasticity_events.iter() {
-                    let projection = self.nid_to_projection.get_mut(&event.pre_syn_nid).unwrap();
+                    let projections = self
+                        .nid_to_projections
+                        .get_mut(&event.syn_coord.pre_syn_nid)
+                        .unwrap();
 
-                    let synapse = &mut projection.synapses[event.synapse_idx];
+                    let projection = &mut projections[event.syn_coord.projection_idx];
+
+                    let synapse = &mut projection.synapses[event.syn_coord.synapse_idx];
 
                     synapse.process_weight_change(
                         event.weight_change,
@@ -439,7 +457,7 @@ impl Partition {
                     let spike = self.neurons[neuron_idx].spike(ctx.t, &self.neuron_params);
                     for spike_coincidence in spike.0 {
                         Self::process_spike_coincidence(
-                            &mut self.nid_to_projection,
+                            &mut self.nid_to_projections,
                             &mut self.plasticity_modulator,
                             ctx.t,
                             spike_coincidence,
@@ -455,7 +473,7 @@ impl Partition {
             if let Some(spike) = self.neurons[neuron_idx].check_spike(ctx.t, &self.neuron_params) {
                 for spike_coincidence in spike.0 {
                     Self::process_spike_coincidence(
-                        &mut self.nid_to_projection,
+                        &mut self.nid_to_projections,
                         &mut self.plasticity_modulator,
                         ctx.t,
                         spike_coincidence,
@@ -470,14 +488,16 @@ impl Partition {
     }
 
     fn process_spike_coincidence(
-        nid_to_projection: &mut HashMap<usize, Projection>,
+        nid_to_projections: &mut HashMap<usize, Vec<Projection>>,
         plasticity_modulator: &mut Option<PlasticityModulator>,
         t: usize,
         spike_coincidence: SpikeCoincidence,
     ) {
-        let projection = nid_to_projection
-            .get_mut(&spike_coincidence.pre_syn_nid)
+        let projections = nid_to_projections
+            .get_mut(&spike_coincidence.syn_coord.pre_syn_nid)
             .unwrap();
+
+        let projection = &mut projections[spike_coincidence.syn_coord.projection_idx];
 
         if let Some(short_term_stdp_params) = &projection.prj_params.short_term_stdp_params {
             let stdp_value = util::compute_stdp(
@@ -485,7 +505,7 @@ impl Partition {
                 &short_term_stdp_params.stdp_params,
             );
 
-            projection.synapses[spike_coincidence.syn_idx].process_short_term_stdp(
+            projection.synapses[spike_coincidence.syn_coord.synapse_idx].process_short_term_stdp(
                 t,
                 stdp_value,
                 short_term_stdp_params.tau,
@@ -497,14 +517,9 @@ impl Partition {
                 util::compute_stdp(spike_coincidence.t_pre_minus_post, long_term_stdp_params);
 
             if let Some(plasticity_modulator) = plasticity_modulator {
-                plasticity_modulator.process_stdp_value(
-                    t,
-                    spike_coincidence.pre_syn_nid,
-                    spike_coincidence.syn_idx,
-                    stdp_value,
-                );
+                plasticity_modulator.process_stdp_value(t, spike_coincidence.syn_coord, stdp_value);
             } else {
-                projection.synapses[spike_coincidence.syn_idx]
+                projection.synapses[spike_coincidence.syn_coord.synapse_idx]
                     .process_weight_change(stdp_value, &projection.prj_params.synapse_params)
             }
         }
@@ -517,8 +532,7 @@ impl Partition {
             let psp_result = self.neurons[transm_event.neuron_idx].apply_psp(
                 t,
                 transm_event.psp,
-                transm_event.pre_syn_nid,
-                transm_event.syn_idx,
+                &transm_event.syn_coord,
                 &self.neuron_params,
             );
 
@@ -527,8 +541,9 @@ impl Partition {
             }
 
             if let Some(spike_coincidence) = psp_result.spike_coincidence {
-                let next_to_last_pre_syn_spike_t =
-                    self.nid_to_projection[&transm_event.pre_syn_nid].next_to_last_pre_syn_spike_t;
+                let next_to_last_pre_syn_spike_t = self.nid_to_projections
+                    [&transm_event.syn_coord.pre_syn_nid][transm_event.syn_coord.projection_idx]
+                    .next_to_last_pre_syn_spike_t;
 
                 let last_post_syn_spike_t =
                     self.neurons[transm_event.neuron_idx].get_last_spike_t();
@@ -538,8 +553,9 @@ impl Partition {
                         (next_to_last_pre_syn_spike_t, last_post_syn_spike_t)
                     {
                         let next_to_last_transm_t = next_to_last_pre_syn_spike_t
-                            + self.nid_to_projection[&transm_event.pre_syn_nid].synapses
-                                [transm_event.syn_idx]
+                            + self.nid_to_projections[&transm_event.syn_coord.pre_syn_nid]
+                                [transm_event.syn_coord.projection_idx]
+                                .synapses[transm_event.syn_coord.synapse_idx]
                                 .conduction_delay as usize;
 
                         next_to_last_transm_t <= last_post_syn_spike_t
@@ -549,7 +565,7 @@ impl Partition {
 
                 if is_eligible {
                     Self::process_spike_coincidence(
-                        &mut self.nid_to_projection,
+                        &mut self.nid_to_projections,
                         &mut self.plasticity_modulator,
                         t,
                         spike_coincidence,
@@ -560,36 +576,43 @@ impl Partition {
     }
 
     fn process_spike(&mut self, spike_t: usize, spiking_nid: usize) {
-        if let Some(projection) = self.nid_to_projection.get_mut(&spiking_nid) {
-            projection.next_to_last_pre_syn_spike_t = projection.last_pre_syn_spike_t;
-            projection.last_pre_syn_spike_t = Some(spike_t);
+        if let Some(projections) = self.nid_to_projections.get_mut(&spiking_nid) {
+            for (projection_idx, projection) in projections.iter_mut().enumerate() {
+                projection.next_to_last_pre_syn_spike_t = projection.last_pre_syn_spike_t;
+                projection.last_pre_syn_spike_t = Some(spike_t);
 
-            let stp_value = projection.stp.on_pre_syn_spike_get_value(spike_t);
+                let stp_value = projection.stp.on_pre_syn_spike_get_value(spike_t);
 
-            let short_term_stdp_tau = projection
-                .prj_params
-                .short_term_stdp_params
-                .as_ref()
-                .map(|short_term_stdp_params| short_term_stdp_params.tau)
-                .unwrap_or(1.0); // if none, default won't have any effect
+                let short_term_stdp_tau = projection
+                    .prj_params
+                    .short_term_stdp_params
+                    .as_ref()
+                    .map(|short_term_stdp_params| short_term_stdp_params.tau)
+                    .unwrap_or(1.0); // if none, default won't have any effect
 
-            for (syn_idx, synapse) in projection.synapses.iter_mut().enumerate() {
-                let psp = synapse.process_pre_syn_spike_get_psp(
-                    spike_t,
-                    stp_value,
-                    &projection.prj_params.synapse_params,
-                    short_term_stdp_tau,
-                );
+                for (synapse_idx, synapse) in projection.synapses.iter_mut().enumerate() {
+                    let psp = synapse.process_pre_syn_spike_get_psp(
+                        spike_t,
+                        stp_value,
+                        &projection.prj_params.synapse_params,
+                        short_term_stdp_tau,
+                    );
 
-                let transmission_event = TransmissionEvent {
-                    syn_idx,
-                    pre_syn_nid: spiking_nid,
-                    neuron_idx: synapse.neuron_idx,
-                    psp,
-                };
+                    let syn_coord = SynapseCoordinate {
+                        pre_syn_nid: spiking_nid,
+                        projection_idx,
+                        synapse_idx,
+                    };
 
-                self.transmission_buffer
-                    .push_at_offset(synapse.conduction_delay as usize - 1, transmission_event);
+                    let transmission_event = TransmissionEvent {
+                        syn_coord,
+                        neuron_idx: synapse.neuron_idx,
+                        psp,
+                    };
+
+                    self.transmission_buffer
+                        .push_at_offset(synapse.conduction_delay as usize - 1, transmission_event);
+                }
             }
         }
     }
@@ -609,7 +632,7 @@ pub struct TickContext {
 mod tests {
     use crate::{
         params::{LayerParams, TechnicalParams},
-        types::HashSet,
+        types::tests::HashSet,
     };
 
     use super::*;
@@ -695,25 +718,25 @@ mod tests {
         assert_eq!(partitions[0].get_num_neurons(), 33);
         assert_eq!(partitions[1].get_num_neurons(), 16);
 
-        assert!(partitions[0].nid_to_projection.is_empty());
-        assert_eq!(partitions[1].nid_to_projection.len(), 100);
+        assert!(partitions[0].nid_to_projections.is_empty());
+        assert_eq!(partitions[1].nid_to_projections.len(), 100);
 
-        assert_eq!(partitions[1].nid_to_projection[&0].synapses.len(), 16);
+        assert_eq!(partitions[1].nid_to_projections[&0][0].synapses.len(), 16);
         assert_eq!(
-            partitions[1].nid_to_projection[&0].synapses[0].neuron_idx,
+            partitions[1].nid_to_projections[&0][0].synapses[0].neuron_idx,
             0
         );
         assert_eq!(
-            partitions[1].nid_to_projection[&0].synapses[0].conduction_delay,
+            partitions[1].nid_to_projections[&0][0].synapses[0].conduction_delay,
             2
         );
 
         assert_eq!(
-            partitions[1].nid_to_projection[&0].synapses[15].neuron_idx,
+            partitions[1].nid_to_projections[&0][0].synapses[15].neuron_idx,
             15
         );
         assert_eq!(
-            partitions[1].nid_to_projection[&0].synapses[15].conduction_delay,
+            partitions[1].nid_to_projections[&0][0].synapses[15].conduction_delay,
             3
         );
     }
@@ -746,9 +769,11 @@ mod tests {
         let partitions = create_partitions(1, 0, &params);
 
         assert_eq!(partitions.len(), 1);
-        assert_eq!(partitions[0].nid_to_projection.len(), 100);
+        assert_eq!(partitions[0].nid_to_projections.len(), 100);
 
-        for (_, projection) in &partitions[0].nid_to_projection {
+        for (_, projections) in &partitions[0].nid_to_projections {
+            assert_eq!(projections.len(), 1);
+            let projection = &projections[0];
             assert_eq!(projection.synapses.len(), 100);
 
             assert!(projection
@@ -825,14 +850,14 @@ mod tests {
         assert_eq!(partitions[1].get_num_neurons(), 100);
         assert_eq!(partitions[2].get_num_neurons(), 10);
 
-        assert!(partitions[0].nid_to_projection.is_empty());
-        assert!(partitions[1].nid_to_projection.is_empty());
-        assert_eq!(partitions[2].nid_to_projection.len(), 100);
+        assert!(partitions[0].nid_to_projections.is_empty());
+        assert!(partitions[1].nid_to_projections.is_empty());
+        assert_eq!(partitions[2].nid_to_projections.len(), 100);
 
         for nid in 5..105 {
-            assert!(partitions[2].nid_to_projection.contains_key(&nid));
+            assert!(partitions[2].nid_to_projections.contains_key(&nid));
             assert_equal(
-                partitions[2].nid_to_projection[&nid]
+                partitions[2].nid_to_projections[&nid][0]
                     .synapses
                     .iter()
                     .map(|synapse| synapse.neuron_idx),
@@ -840,7 +865,7 @@ mod tests {
             );
         }
 
-        let synapses_for_nid_65 = &partitions[2].nid_to_projection[&(65)].synapses;
+        let synapses_for_nid_65 = &partitions[2].nid_to_projections[&(65)][0].synapses;
 
         // position is ~= 0.6060606
         // min delay: 1
@@ -862,14 +887,14 @@ mod tests {
         params.layer_connections[0].connect_width = 0.4;
         let partitions = create_partitions(1, 0, &params);
 
-        assert_eq!(partitions[2].nid_to_projection.len(), 100);
+        assert_eq!(partitions[2].nid_to_projections.len(), 100);
 
         for nid in 5..105 {
-            assert!(partitions[2].nid_to_projection.contains_key(&nid));
+            assert!(partitions[2].nid_to_projections.contains_key(&nid));
         }
 
         assert_equal(
-            partitions[2].nid_to_projection[&5]
+            partitions[2].nid_to_projections[&5][0]
                 .synapses
                 .iter()
                 .map(|synapse| synapse.neuron_idx),
@@ -877,7 +902,7 @@ mod tests {
         );
 
         assert_equal(
-            partitions[2].nid_to_projection[&104]
+            partitions[2].nid_to_projections[&104][0]
                 .synapses
                 .iter()
                 .map(|synapse| synapse.neuron_idx),
@@ -885,7 +910,7 @@ mod tests {
         );
 
         assert_equal(
-            partitions[2].nid_to_projection[&(5 + 60)]
+            partitions[2].nid_to_projections[&(5 + 60)][0]
                 .synapses
                 .iter()
                 .map(|synapse| synapse.neuron_idx),
@@ -896,11 +921,11 @@ mod tests {
         params.layer_connections[0].connect_density = 0.25;
         let partitions = create_partitions(1, 0, &params);
 
-        assert_eq!(partitions[2].nid_to_projection.len(), 100);
+        assert_eq!(partitions[2].nid_to_projections.len(), 100);
 
         for nid in 5..105 {
-            assert!(partitions[2].nid_to_projection.contains_key(&nid));
-            assert_eq!(partitions[2].nid_to_projection[&nid].synapses.len(), 1);
+            assert!(partitions[2].nid_to_projections.contains_key(&nid));
+            assert_eq!(partitions[2].nid_to_projections[&nid][0].synapses.len(), 1);
         }
     }
 
@@ -921,23 +946,23 @@ mod tests {
 
         let partitions = create_partitions(1, 0, &params);
 
-        assert_eq!(partitions[1].nid_to_projection.len(), 3);
+        assert_eq!(partitions[1].nid_to_projections.len(), 3);
 
-        assert_eq!(partitions[1].nid_to_projection[&0].synapses.len(), 1);
+        assert_eq!(partitions[1].nid_to_projections[&0][0].synapses.len(), 1);
         assert_eq!(
-            partitions[1].nid_to_projection[&0].synapses[0].neuron_idx,
+            partitions[1].nid_to_projections[&0][0].synapses[0].neuron_idx,
             0
         );
 
-        assert_eq!(partitions[1].nid_to_projection[&2].synapses.len(), 1);
+        assert_eq!(partitions[1].nid_to_projections[&2][0].synapses.len(), 1);
         assert_eq!(
-            partitions[1].nid_to_projection[&2].synapses[0].neuron_idx,
+            partitions[1].nid_to_projections[&2][0].synapses[0].neuron_idx,
             1
         );
 
-        assert_eq!(partitions[1].nid_to_projection[&4].synapses.len(), 1);
+        assert_eq!(partitions[1].nid_to_projections[&4][0].synapses.len(), 1);
         assert_eq!(
-            partitions[1].nid_to_projection[&4].synapses[0].neuron_idx,
+            partitions[1].nid_to_projections[&4][0].synapses[0].neuron_idx,
             2
         );
     }

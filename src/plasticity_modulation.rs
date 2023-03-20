@@ -1,6 +1,9 @@
 use std::{collections::VecDeque, usize};
 
-use crate::{params::PlasticityModulationParams, util};
+use crate::{
+    params::PlasticityModulationParams,
+    util::{self, SynapseCoordinate},
+};
 
 #[derive(Debug)]
 pub struct PlasticityModulator {
@@ -14,8 +17,7 @@ pub struct PlasticityModulator {
 #[derive(Debug, PartialEq)]
 pub struct PlasticityEvent {
     pub weight_change: f32,
-    pub pre_syn_nid: usize,
-    pub synapse_idx: usize,
+    pub syn_coord: SynapseCoordinate,
 }
 
 pub struct PlasticityEvents<'a> {
@@ -69,8 +71,7 @@ impl<'a> PlasticityEvents<'a> {
 
                 PlasticityEvent {
                     weight_change,
-                    pre_syn_nid: elig_trace.pre_syn_nid,
-                    synapse_idx: elig_trace.synapse_idx,
+                    syn_coord: elig_trace.syn_coord.clone(),
                 }
             })
             .filter(|event| {
@@ -114,18 +115,11 @@ impl PlasticityModulator {
         }
     }
 
-    pub fn process_stdp_value(
-        &mut self,
-        t: usize,
-        pre_syn_nid: usize,
-        synapse_idx: usize,
-        stdp_value: f32,
-    ) {
+    pub fn process_stdp_value(&mut self, t: usize, syn_coord: SynapseCoordinate, stdp_value: f32) {
         self.elig_traces.push_back(EligibilityTrace {
             t: t + self.params.eligibility_trace_delay,
             stdp_value,
-            pre_syn_nid,
-            synapse_idx,
+            syn_coord,
         });
     }
 
@@ -190,14 +184,25 @@ impl PlasticityModulator {
 struct EligibilityTrace {
     t: usize,
     stdp_value: f32,
-    pre_syn_nid: usize,
-    synapse_idx: usize,
+    syn_coord: SynapseCoordinate,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use float_cmp::assert_approx_eq;
+
+    const SYN_COORD_0: SynapseCoordinate = SynapseCoordinate {
+        pre_syn_nid: 0,
+        projection_idx: 1,
+        synapse_idx: 2,
+    };
+
+    const SYN_COORD_1: SynapseCoordinate = SynapseCoordinate {
+        pre_syn_nid: 3,
+        projection_idx: 4,
+        synapse_idx: 5,
+    };
 
     fn tick_unwrap(sut: &mut PlasticityModulator, t: usize) -> Vec<PlasticityEvent> {
         sut.tick(t).unwrap().iter().collect()
@@ -211,7 +216,7 @@ mod tests {
 
         let mut sut = PlasticityModulator::new(params);
 
-        sut.process_stdp_value(0, 0, 1, 1.0);
+        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
 
         assert!(sut.tick(0).is_none());
         assert!(tick_unwrap(&mut sut, 1).is_empty());
@@ -227,7 +232,7 @@ mod tests {
 
         let mut sut = PlasticityModulator::new(params);
 
-        sut.process_stdp_value(0, 0, 1, 1.2);
+        sut.process_stdp_value(0, SYN_COORD_0, 1.2);
 
         assert!(sut.tick(0).is_none());
 
@@ -237,8 +242,7 @@ mod tests {
 
         assert_eq!(plasticity_events.len(), 1);
         let event = plasticity_events.first().unwrap();
-        assert_eq!(event.pre_syn_nid, 0);
-        assert_eq!(event.synapse_idx, 1);
+        assert_eq!(event.syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, event.weight_change, 0.9);
     }
 
@@ -255,27 +259,25 @@ mod tests {
 
         sut.tick(0);
 
-        sut.process_stdp_value(0, 0, 0, 1.0);
+        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
 
         assert!(sut.tick(1).is_none());
         sut.process_dopamine(1.0);
-        sut.process_stdp_value(1, 1, 1, 1.0);
+        sut.process_stdp_value(1, SYN_COORD_1, 1.0);
 
         // both eligility traces are before cutoff time -> two events
         let tick_2_events = tick_unwrap(&mut sut, 2);
 
         let event_0 = tick_2_events.get(0).unwrap();
 
-        assert_eq!(tick_2_events[0].pre_syn_nid, 0);
-        assert_eq!(tick_2_events[0].synapse_idx, 0);
+        assert_eq!(tick_2_events[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(
             f32,
             event_0.weight_change,
             util::get_decay_factor(2, 0, 1.0)
         );
 
-        assert_eq!(tick_2_events[1].pre_syn_nid, 1);
-        assert_eq!(tick_2_events[1].synapse_idx, 1);
+        assert_eq!(tick_2_events[1].syn_coord, SYN_COORD_1);
         assert_approx_eq!(
             f32,
             tick_2_events[1].weight_change,
@@ -291,8 +293,7 @@ mod tests {
         assert_eq!(tick_4_events.len(), 1);
 
         let event_0 = tick_4_events.first().unwrap();
-        assert_eq!(event_0.pre_syn_nid, 1);
-        assert_eq!(event_0.synapse_idx, 1);
+        assert_eq!(event_0.syn_coord, SYN_COORD_1);
         assert_approx_eq!(
             f32,
             event_0.weight_change,
@@ -314,7 +315,7 @@ mod tests {
         sut.tick(0);
 
         sut.process_dopamine(1.0);
-        sut.process_stdp_value(0, 0, 0, 1.1);
+        sut.process_stdp_value(0, SYN_COORD_0, 1.1);
         sut.tick(1);
         sut.process_dopamine(1.0);
 
@@ -358,12 +359,12 @@ mod tests {
         sut.tick(0);
         sut.process_dopamine(1.0);
         sut.tick(1);
-        sut.process_stdp_value(1, 0, 0, 1.0);
+        sut.process_stdp_value(1, SYN_COORD_0, 1.0);
 
         sut.process_dopamine(1.0);
         assert!(tick_unwrap(&mut sut, 2).is_empty());
 
-        sut.process_stdp_value(2, 1, 1, 1.0);
+        sut.process_stdp_value(2, SYN_COORD_1, 1.0);
 
         sut.process_dopamine(1.0);
 
@@ -371,8 +372,7 @@ mod tests {
 
         // first trace delay is past, second trace delay not yet
         assert_eq!(tick_3_events.len(), 1);
-        assert_eq!(tick_3_events[0].pre_syn_nid, 0);
-        assert_eq!(tick_3_events[0].synapse_idx, 0);
+        assert_eq!(tick_3_events[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, tick_3_events[0].weight_change, 1.0);
 
         sut.process_dopamine(1.0);
@@ -380,11 +380,9 @@ mod tests {
 
         // now both delays are past
         assert_eq!(tick_4_events.len(), 2);
-        assert_eq!(tick_4_events[0].pre_syn_nid, 0);
-        assert_eq!(tick_4_events[0].synapse_idx, 0);
+        assert_eq!(tick_4_events[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, tick_4_events[0].weight_change, 1.0 * (-1.0f32).exp());
-        assert_eq!(tick_4_events[1].pre_syn_nid, 1);
-        assert_eq!(tick_4_events[1].synapse_idx, 1);
+        assert_eq!(tick_4_events[1].syn_coord, SYN_COORD_1);
         assert_approx_eq!(f32, tick_4_events[1].weight_change, 1.0);
     }
 
@@ -400,7 +398,7 @@ mod tests {
         let mut sut = PlasticityModulator::new(params);
 
         sut.tick(0);
-        sut.process_stdp_value(0, 0, 0, -2.0);
+        sut.process_stdp_value(0, SYN_COORD_0, -2.0);
         sut.process_dopamine(1.0);
 
         let events = tick_unwrap(&mut sut, 1);
@@ -420,7 +418,7 @@ mod tests {
         let mut sut = PlasticityModulator::new(params);
 
         sut.tick(0);
-        sut.process_stdp_value(0, 0, 0, 2.0);
+        sut.process_stdp_value(0, SYN_COORD_0, 2.0);
         sut.process_dopamine(-1.0);
 
         let events = tick_unwrap(&mut sut, 1);
@@ -436,14 +434,14 @@ mod tests {
         params.dopamine_modulation_factor = 1.0;
         let mut sut = PlasticityModulator::new(params);
         sut.tick(0);
-        sut.process_stdp_value(0, 0, 0, 1.0);
+        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
         sut.process_dopamine(1.0);
 
         for t in 1..12 {
             sut.tick(t);
         }
 
-        sut.process_stdp_value(11, 0, 0, 1.0);
+        sut.process_stdp_value(11, SYN_COORD_0, 1.0);
         sut.process_dopamine(1.0);
 
         sut.reset_ephemeral_state();
@@ -476,7 +474,7 @@ mod tests {
         }
 
         sut.tick(601);
-        sut.process_stdp_value(601, 1, 2, -0.2);
+        sut.process_stdp_value(601, SYN_COORD_0, -0.2);
 
         for t in 601..650 {
             assert!(sut.tick(t).is_none());
@@ -500,8 +498,7 @@ mod tests {
 
         assert_eq!(events_1s.len(), 1);
 
-        assert_eq!(events_1s[0].pre_syn_nid, 1);
-        assert_eq!(events_1s[0].synapse_idx, 2);
+        assert_eq!(events_1s[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, events_1s[0].weight_change, -0.0421078442);
 
         for t in 1001..1500 {
@@ -514,7 +511,7 @@ mod tests {
             assert!(sut.tick(t).is_none());
         }
 
-        sut.process_stdp_value(1900, 3, 4, 0.4);
+        sut.process_stdp_value(1900, SYN_COORD_1, 0.4);
 
         for t in 1901..1950 {
             assert!(sut.tick(t).is_none());
@@ -530,12 +527,10 @@ mod tests {
 
         assert_eq!(events_2s.len(), 2);
 
-        assert_eq!(events_2s[0].pre_syn_nid, 1);
-        assert_eq!(events_2s[0].synapse_idx, 2);
+        assert_eq!(events_2s[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, events_2s[0].weight_change, -0.05444362263);
 
-        assert_eq!(events_2s[1].pre_syn_nid, 3);
-        assert_eq!(events_2s[1].synapse_idx, 4);
+        assert_eq!(events_2s[1].syn_coord, SYN_COORD_1);
         assert_approx_eq!(f32, events_2s[1].weight_change, 0.216);
 
         for t in 2001..2650 {
@@ -552,12 +547,10 @@ mod tests {
 
         assert_eq!(events_3s.len(), 2);
 
-        assert_eq!(events_3s[0].pre_syn_nid, 1);
-        assert_eq!(events_3s[0].synapse_idx, 2);
+        assert_eq!(events_3s[0].syn_coord, SYN_COORD_0);
         assert_approx_eq!(f32, events_3s[0].weight_change, -0.01479378042);
 
-        assert_eq!(events_3s[1].pre_syn_nid, 3);
-        assert_eq!(events_3s[1].synapse_idx, 4);
+        assert_eq!(events_3s[1].syn_coord, SYN_COORD_1);
         assert_approx_eq!(f32, events_3s[1].weight_change, 0.15007032708);
 
         for t in 3001..3500 {
@@ -575,8 +568,7 @@ mod tests {
         assert_eq!(sut.elig_traces.len(), 1);
         assert_eq!(events_4s.len(), 1);
 
-        assert_eq!(events_4s[0].pre_syn_nid, 3);
-        assert_eq!(events_4s[0].synapse_idx, 4);
+        assert_eq!(events_4s[0].syn_coord, SYN_COORD_1);
         assert_approx_eq!(f32, events_4s[0].weight_change, 0.55207788064);
 
         sut.process_dopamine(10.0);
