@@ -552,6 +552,7 @@ mod tests {
                 },
             ],
             synapse_states: vec![SynapseState {
+                projection_id: 0,
                 pre_syn_nid: 0,
                 post_syn_nid: 5,
                 conduction_delay: 3,
@@ -581,6 +582,7 @@ mod tests {
             ],
             synapse_states: vec![
                 SynapseState {
+                    projection_id: 0,
                     pre_syn_nid: 0,
                     post_syn_nid: 1,
                     conduction_delay: 1,
@@ -588,6 +590,7 @@ mod tests {
                     short_term_stdp_offset: 0.2,
                 },
                 SynapseState {
+                    projection_id: 0,
                     pre_syn_nid: 0,
                     post_syn_nid: 2,
                     conduction_delay: 2,

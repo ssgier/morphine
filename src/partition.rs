@@ -50,6 +50,7 @@ struct Projection {
     prj_params: ProjectionParams,
     last_pre_syn_spike_t: Option<usize>,
     next_to_last_pre_syn_spike_t: Option<usize>,
+    projection_id: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -66,11 +67,11 @@ pub fn create_partitions(
 ) -> Vec<Partition> {
     let mut partitions = Vec::new();
 
-    let mut to_layer_id_to_conn_params = HashMap::default();
+    let mut to_layer_id_to_prj_id_and_conn_params = HashMap::default();
 
-    for conn in &params.layer_connections {
-        to_layer_id_to_conn_params
-            .entry(conn.to_layer_id)
+    for conn in params.layer_connections.iter().enumerate() {
+        to_layer_id_to_prj_id_and_conn_params
+            .entry(conn.1.to_layer_id)
             .or_insert_with(Vec::new)
             .push(conn);
     }
@@ -104,8 +105,8 @@ pub fn create_partitions(
             .as_ref()
             .map(|params| PlasticityModulator::new(params.clone()));
 
-        if let Some(connection_params_elements) = to_layer_id_to_conn_params.get(&layer_id) {
-            for connection_params in connection_params_elements.iter() {
+        if let Some(connection_params_elements) = to_layer_id_to_prj_id_and_conn_params.get(&layer_id) {
+            for (projection_id, connection_params) in connection_params_elements.iter() {
                 let to_num_neurons = params.layers[connection_params.to_layer_id].num_neurons;
                 if to_num_neurons == 0 {
                     continue;
@@ -194,6 +195,7 @@ pub fn create_partitions(
                             prj_params: connection_params.projection_params.clone(),
                             last_pre_syn_spike_t: None,
                             next_to_last_pre_syn_spike_t: None,
+                            projection_id: *projection_id,
                         };
 
                         nid_to_projections
@@ -380,6 +382,7 @@ impl Partition {
                             conduction_delay: synapse.conduction_delay,
                             weight: synapse.weight,
                             short_term_stdp_offset,
+                            projection_id: projection.projection_id,
                         }
                     })
                 })

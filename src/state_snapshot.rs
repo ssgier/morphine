@@ -15,6 +15,7 @@ pub struct NeuronState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynapseState {
+    pub projection_id: usize,
     pub pre_syn_nid: usize,
     pub post_syn_nid: usize,
     pub conduction_delay: u8,

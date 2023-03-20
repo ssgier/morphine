@@ -1356,13 +1356,16 @@ fn multiple_projections_same_layer_pair() {
 
     assert_eq!(syn_states_from_1.len(), 5);
 
+    assert_eq!(syn_states_from_1[0].projection_id, 0);
     assert_approx_eq!(f32, syn_states_from_1[0].weight, 0.6);
     assert_approx_eq!(f32, syn_states_from_1[0].short_term_stdp_offset, 0.0);
 
+    assert_eq!(syn_states_from_1[2].projection_id, 1);
     assert_eq!(syn_states_from_1[2].post_syn_nid, 4);
     assert_approx_eq!(f32, syn_states_from_1[2].weight, 0.7);
     assert_approx_eq!(f32, syn_states_from_1[2].short_term_stdp_offset, 0.0);
 
+    assert_eq!(syn_states_from_1[4].projection_id, 2);
     assert_eq!(syn_states_from_1[4].post_syn_nid, 4);
     assert_approx_eq!(f32, syn_states_from_1[4].weight, 0.5);
     assert_approx_eq!(
