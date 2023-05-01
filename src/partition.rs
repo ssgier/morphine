@@ -1,3 +1,6 @@
+use crate::partition::Request::ExtractStateSnapshot;
+use crate::partition::Request::ResetEphemeralState;
+use crate::partition::Request::Tick;
 use bus::BusReader;
 use itertools::Itertools;
 use rand::{
@@ -22,9 +25,23 @@ use crate::{
     util,
 };
 
+#[derive(Debug, Clone)]
+pub enum Request {
+    Tick(TickContext),
+    ExtractStateSnapshot { t: usize },
+    ResetEphemeralState { t: usize },
+}
+
+#[derive(Debug, Clone)]
+pub struct TickContext {
+    pub t: usize,
+    pub spike_trigger_nids: Vec<usize>,
+    pub spiked_nids: Vec<usize>,
+    pub dopamine_amount: f32,
+}
+
 pub struct PartitionGroupResult {
     pub spiking_nids: Vec<usize>,
-    pub partition_state_snapshots: Option<Vec<PartitionStateSnapshot>>,
     pub synaptic_transmission_count: usize,
 }
 
@@ -105,7 +122,9 @@ pub fn create_partitions(
             .as_ref()
             .map(|params| PlasticityModulator::new(params.clone()));
 
-        if let Some(connection_params_elements) = to_layer_id_to_prj_id_and_conn_params.get(&layer_id) {
+        if let Some(connection_params_elements) =
+            to_layer_id_to_prj_id_and_conn_params.get(&layer_id)
+        {
             for (projection_id, connection_params) in connection_params_elements.iter() {
                 let to_num_neurons = params.layers[connection_params.to_layer_id].num_neurons;
                 if to_num_neurons == 0 {
@@ -293,34 +312,46 @@ fn get_positions_1d(num_neurons: usize) -> Vec<f64> {
 impl Partition {
     pub fn run(
         partitions: &mut [Partition],
-        mut rx: BusReader<TickContext>,
+        mut rx: BusReader<Request>,
         partition_result_tx: MpscSender<PartitionGroupResult>,
+        partition_snapshots_tx: MpscSender<Vec<PartitionStateSnapshot>>,
+        partition_ack_tx: MpscSender<()>,
     ) {
-        while let Ok(ctx) = rx.recv() {
-            let mut spiking_nids = Vec::new();
-            let mut synaptic_transmission_count = 0;
+        while let Ok(request) = rx.recv() {
+            match request {
+                Tick(ctx) => {
+                    let mut spiking_nids = Vec::new();
+                    let mut synaptic_transmission_count = 0;
 
-            for partition in partitions.iter_mut() {
-                partition.process_tick(&ctx, &mut spiking_nids, &mut synaptic_transmission_count);
-            }
+                    for partition in partitions.iter_mut() {
+                        partition.process_tick(
+                            &ctx,
+                            &mut spiking_nids,
+                            &mut synaptic_transmission_count,
+                        );
+                    }
 
-            let partition_state_snapshots = if ctx.extract_state_snapshot {
-                let mut snapshots = Vec::new();
-                for partition in &mut *partitions {
-                    snapshots.push(partition.extract_state_snapshot(&ctx));
+                    partition_result_tx
+                        .send(PartitionGroupResult {
+                            spiking_nids,
+                            synaptic_transmission_count,
+                        })
+                        .ok();
                 }
-                Some(snapshots)
-            } else {
-                None
-            };
-
-            partition_result_tx
-                .send(PartitionGroupResult {
-                    spiking_nids,
-                    partition_state_snapshots,
-                    synaptic_transmission_count,
-                })
-                .ok();
+                ExtractStateSnapshot { t } => {
+                    let mut snapshots = Vec::new();
+                    for partition in &mut *partitions {
+                        snapshots.push(partition.extract_state_snapshot(t));
+                    }
+                    partition_snapshots_tx.send(snapshots).ok();
+                }
+                ResetEphemeralState { t } => {
+                    for partition in &mut *partitions {
+                        partition.reset_ephemeral_state(t);
+                    }
+                    partition_ack_tx.send(()).ok();
+                }
+            }
         }
     }
 
@@ -350,14 +381,14 @@ impl Partition {
         self.transmission_buffer.clear();
     }
 
-    fn extract_state_snapshot(&self, ctx: &TickContext) -> PartitionStateSnapshot {
+    fn extract_state_snapshot(&self, t: usize) -> PartitionStateSnapshot {
         let neuron_states = self
             .neurons
             .iter()
             .map(|neuron| NeuronState {
-                voltage: neuron.get_voltage(ctx.t, &self.neuron_params),
-                threshold: neuron.get_threshold(ctx.t, &self.neuron_params),
-                is_refractory: neuron.is_refractory(ctx.t),
+                voltage: neuron.get_voltage(t, &self.neuron_params),
+                threshold: neuron.get_threshold(t, &self.neuron_params),
+                is_refractory: neuron.is_refractory(t),
             })
             .collect();
 
@@ -371,7 +402,7 @@ impl Partition {
                         let short_term_stdp_offset = if let Some(short_term_stdp_params) =
                             &projection.prj_params.short_term_stdp_params
                         {
-                            synapse.get_short_term_stdp_offset(ctx.t, short_term_stdp_params.tau)
+                            synapse.get_short_term_stdp_offset(t, short_term_stdp_params.tau)
                         } else {
                             0.0
                         };
@@ -402,10 +433,6 @@ impl Partition {
         spiking_nids: &mut Vec<usize>,
         synaptic_transmission_count: &mut usize,
     ) {
-        if ctx.reset_ephemeral_state {
-            self.reset_ephemeral_state(ctx.t);
-        }
-
         self.process_modulated_plasticity(ctx.t, ctx.dopamine_amount);
         if ctx.t > 0 {
             self.process_spikes(ctx);
@@ -619,16 +646,6 @@ impl Partition {
             }
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TickContext {
-    pub t: usize,
-    pub spike_trigger_nids: Vec<usize>,
-    pub spiked_nids: Vec<usize>,
-    pub dopamine_amount: f32,
-    pub extract_state_snapshot: bool,
-    pub reset_ephemeral_state: bool,
 }
 
 #[cfg(test)]

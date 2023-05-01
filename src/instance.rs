@@ -3,6 +3,8 @@ use crate::params::InstanceParams;
 use crate::partition;
 use crate::partition::Partition;
 use crate::partition::PartitionGroupResult;
+use crate::partition::PartitionStateSnapshot;
+use crate::partition::Request;
 use crate::partition::TickContext;
 use crate::state_snapshot::StateSnapshot;
 use crate::types::HashMap;
@@ -26,6 +28,8 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
 
     let mut broadcast_tx = Bus::new(1);
     let (partition_result_tx, partition_result_rx) = mpsc_channel();
+    let (partition_snapshots_tx, partition_snapshots_rx) = mpsc_channel();
+    let (partition_ack_tx, partition_ack_rx) = mpsc_channel();
 
     let num_threads = get_num_threads(&params);
     let mut join_handles = Vec::new();
@@ -33,6 +37,8 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
     for thread_id in 0..num_threads {
         let broadcast_rx = broadcast_tx.add_rx();
         let partition_result_tx = partition_result_tx.clone();
+        let partition_snapshots_tx = partition_snapshots_tx.clone();
+        let partition_ack_tx = partition_ack_tx.clone();
         let params = params.clone();
 
         join_handles.push(thread::spawn(move || {
@@ -42,7 +48,13 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
             }
 
             let mut partitions = partition::create_partitions(num_threads, thread_id, &params);
-            Partition::run(&mut partitions, broadcast_rx, partition_result_tx);
+            Partition::run(
+                &mut partitions,
+                broadcast_rx,
+                partition_result_tx,
+                partition_snapshots_tx,
+                partition_ack_tx,
+            );
         }));
     }
 
@@ -69,10 +81,34 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         spiking_nid_buffer: Vec::new(),
         broadcast_tx,
         partition_result_rx,
+        partition_snapshots_rx,
+        partition_ack_rx,
         num_partitions: num_threads,
         tick_period: 0,
         join_handles,
     })
+}
+
+fn aggregate_state_snapshot(
+    partition_group_snapshots: Vec<Vec<PartitionStateSnapshot>>,
+) -> StateSnapshot {
+    let mut neuron_states = Vec::new();
+    let mut synapse_states = Vec::new();
+
+    let partition_snapshots_ordered = partition_group_snapshots
+        .into_iter()
+        .flatten()
+        .sorted_by_key(|partition_snapshot| partition_snapshot.nid_start);
+
+    for mut partition_snapshot in partition_snapshots_ordered {
+        neuron_states.append(&mut partition_snapshot.neuron_states);
+        synapse_states.append(&mut partition_snapshot.synapse_states);
+    }
+
+    StateSnapshot {
+        neuron_states,
+        synapse_states,
+    }
 }
 
 fn get_num_threads(params: &InstanceParams) -> usize {
@@ -105,8 +141,6 @@ pub struct TickInput {
     pub force_spiking_out_channel_ids: Vec<usize>,
     pub force_spiking_nids: Vec<usize>,
     pub reward: f32,
-    pub extract_state_snapshot: bool,
-    pub reset_ephemeral_state: bool,
 }
 
 impl Default for TickInput {
@@ -118,12 +152,6 @@ impl Default for TickInput {
 impl TickInput {
     pub fn new() -> Self {
         EMPTY_TICK_INPUT.clone()
-    }
-
-    pub fn ephemeral_state_reset() -> Self {
-        let mut result = EMPTY_TICK_INPUT.clone();
-        result.reset_ephemeral_state = true;
-        result
     }
 
     pub fn from_spiking_in_channel_ids(spiking_in_channel_ids: &[usize]) -> Self {
@@ -151,7 +179,6 @@ pub struct TickResult {
     pub spiking_out_channel_ids: Vec<usize>,
     pub spiking_nids: Vec<usize>,
     pub synaptic_transmission_count: usize,
-    pub state_snapshot: Option<StateSnapshot>,
 }
 
 pub struct Instance {
@@ -160,8 +187,10 @@ pub struct Instance {
     nid_to_out_channel_id: HashMap<usize, usize>,
     out_channel_id_to_nid: HashMap<usize, usize>,
     spiking_nid_buffer: Vec<usize>,
-    broadcast_tx: Option<Bus<TickContext>>,
+    broadcast_tx: Option<Bus<Request>>,
     partition_result_rx: MpscReceiver<PartitionGroupResult>,
+    partition_snapshots_rx: MpscReceiver<Vec<PartitionStateSnapshot>>,
+    partition_ack_rx: MpscReceiver<()>,
     num_partitions: usize,
     tick_period: usize,
     join_handles: Vec<JoinHandle<()>>,
@@ -172,8 +201,6 @@ static EMPTY_TICK_INPUT: TickInput = TickInput {
     force_spiking_out_channel_ids: Vec::new(),
     force_spiking_nids: Vec::new(),
     reward: 0.0,
-    extract_state_snapshot: false,
-    reset_ephemeral_state: false,
 };
 
 impl Instance {
@@ -190,11 +217,9 @@ impl Instance {
     }
 
     pub fn tick(&mut self, tick_input: &TickInput) -> SimpleResult<TickResult> {
-        self.validate_tick_input(tick_input)?;
+        self.tick_period += 1;
 
-        if tick_input.reset_ephemeral_state {
-            self.spiking_nid_buffer.clear();
-        }
+        self.validate_tick_input(tick_input)?;
 
         let mut spike_trigger_nids: Vec<usize> = tick_input.spiking_in_channel_ids.to_vec();
         spike_trigger_nids.extend_from_slice(&tick_input.force_spiking_nids);
@@ -210,14 +235,12 @@ impl Instance {
         let dopamine_amount = tick_input.reward; // to be revised. There might be an indirection via dopaminergic neurons
 
         let t = self.tick_period;
-        let ctx = TickContext {
+        let ctx = Request::Tick(TickContext {
             t,
             spike_trigger_nids,
             spiked_nids,
             dopamine_amount,
-            extract_state_snapshot: tick_input.extract_state_snapshot,
-            reset_ephemeral_state: tick_input.reset_ephemeral_state,
-        };
+        });
 
         self.broadcast_tx.as_mut().unwrap().broadcast(ctx);
 
@@ -234,12 +257,6 @@ impl Instance {
                 .extend(&partition_group_result.spiking_nids);
         }
 
-        let state_snapshot = if tick_input.extract_state_snapshot {
-            Some(aggregate_state_snapshot(partition_group_results))
-        } else {
-            None
-        };
-
         self.spiking_nid_buffer.sort();
 
         let out_spiking_channel_ids: Vec<usize> = self
@@ -248,11 +265,8 @@ impl Instance {
             .filter_map(|spiking_nid| self.nid_to_out_channel_id.get(spiking_nid).copied())
             .collect();
 
-        self.tick_period += 1;
-
         Ok(TickResult {
             spiking_out_channel_ids: out_spiking_channel_ids,
-            state_snapshot,
             spiking_nids: self.spiking_nid_buffer.clone(),
             synaptic_transmission_count,
             t,
@@ -271,6 +285,38 @@ impl Instance {
 
     pub fn get_tick_period(&self) -> usize {
         self.tick_period
+    }
+
+    pub fn extract_state_snapshot(&mut self) -> StateSnapshot {
+        self.broadcast_tx
+            .as_mut()
+            .unwrap()
+            .broadcast(Request::ExtractStateSnapshot {
+                t: self.tick_period,
+            });
+
+        let mut partition_group_snapshots = Vec::new();
+
+        for _ in 0..self.num_partitions {
+            partition_group_snapshots.push(self.partition_snapshots_rx.recv().unwrap());
+        }
+
+        aggregate_state_snapshot(partition_group_snapshots)
+    }
+
+    pub fn reset_ephemeral_state(&mut self) {
+        self.spiking_nid_buffer.clear();
+
+        self.broadcast_tx
+            .as_mut()
+            .unwrap()
+            .broadcast(Request::ResetEphemeralState {
+                t: self.tick_period,
+            });
+
+        for _ in 0..self.num_partitions {
+            self.partition_ack_rx.recv().unwrap();
+        }
     }
 
     fn validate_tick_input(&self, tick_input: &TickInput) -> SimpleResult<()> {
@@ -315,26 +361,6 @@ impl Drop for Instance {
     }
 }
 
-fn aggregate_state_snapshot(partition_group_results: Vec<PartitionGroupResult>) -> StateSnapshot {
-    let mut neuron_states = Vec::new();
-    let mut synapse_states = Vec::new();
-
-    let partition_snapshots_ordered = partition_group_results
-        .into_iter()
-        .flat_map(|result| result.partition_state_snapshots.unwrap())
-        .sorted_by_key(|partition_snapshot| partition_snapshot.nid_start);
-
-    for mut partition_snapshot in partition_snapshots_ordered {
-        neuron_states.append(&mut partition_snapshot.neuron_states);
-        synapse_states.append(&mut partition_snapshot.synapse_states);
-    }
-
-    StateSnapshot {
-        neuron_states,
-        synapse_states,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::params::{
@@ -357,6 +383,8 @@ mod tests {
 
         let broadcast_tx = Some(Bus::new(1));
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
+        let (_, partition_snapshots_rx) = mpsc_channel();
+        let (_, partition_ack_rx) = mpsc_channel();
 
         let spiking_in_channel_id = 3;
         let channel_mapped_nid = 3;
@@ -374,6 +402,8 @@ mod tests {
             spiking_nid_buffer: Vec::new(),
             broadcast_tx,
             partition_result_rx,
+            partition_snapshots_rx,
+            partition_ack_rx,
             num_partitions,
             tick_period: 0,
             join_handles: Vec::new(),
@@ -398,7 +428,6 @@ mod tests {
                         .send(PartitionGroupResult {
                             spiking_nids,
                             synaptic_transmission_count: 0,
-                            partition_state_snapshots: None,
                         })
                         .unwrap();
 
@@ -409,7 +438,6 @@ mod tests {
                         .send(PartitionGroupResult {
                             spiking_nids: Vec::new(),
                             synaptic_transmission_count: 0,
-                            partition_state_snapshots: None,
                         })
                         .unwrap();
 
@@ -439,11 +467,16 @@ mod tests {
         assert_eq!(instance.get_tick_period(), 2);
 
         for join_handle in join_handles {
-            let (ctx_1st, ctx_2nd) = join_handle.join().unwrap();
-            assert_eq!(ctx_1st.spike_trigger_nids, [channel_mapped_nid]);
-            assert_eq!(ctx_1st.spiked_nids, [] as [usize; 0]);
-            assert_eq!(ctx_2nd.spike_trigger_nids, [] as [usize; 0]);
-            assert_eq!(ctx_2nd.spiked_nids, [spiking_nid]);
+            if let (Request::Tick(ctx_1st), Request::Tick(ctx_2nd)) =
+                join_handle.join().unwrap()
+            {
+                assert_eq!(ctx_1st.spike_trigger_nids, [channel_mapped_nid]);
+                assert_eq!(ctx_1st.spiked_nids, [] as [usize; 0]);
+                assert_eq!(ctx_2nd.spike_trigger_nids, [] as [usize; 0]);
+                assert_eq!(ctx_2nd.spiked_nids, [spiking_nid]);
+            } else {
+                panic!();
+            }
         }
     }
 
@@ -453,6 +486,8 @@ mod tests {
 
         let broadcast_tx = Some(Bus::new(1));
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
+        let (_, partition_snapshots_rx) = mpsc_channel();
+        let (_, partition_ack_rx) = mpsc_channel();
         let mut out_nid_channel_mapping = HashMap::default();
 
         for i in 0..10 {
@@ -470,6 +505,8 @@ mod tests {
             spiking_nid_buffer: Vec::new(),
             broadcast_tx,
             partition_result_rx,
+            partition_snapshots_rx,
+            partition_ack_rx,
             num_partitions,
             tick_period: 0,
             join_handles: Vec::new(),
@@ -478,7 +515,7 @@ mod tests {
         let mut broadcast_rx = instance.broadcast_tx.as_mut().unwrap().add_rx();
 
         let join_handle = thread::spawn(move || {
-            while let Ok(ctx) = broadcast_rx.recv() {
+            while let Ok(Request::Tick(ctx)) = broadcast_rx.recv() {
                 let spiking_nids = ctx
                     .spike_trigger_nids
                     .into_iter()
@@ -488,7 +525,6 @@ mod tests {
                     .send(PartitionGroupResult {
                         spiking_nids,
                         synaptic_transmission_count: 0,
-                        partition_state_snapshots: None,
                     })
                     .unwrap();
             }
@@ -610,21 +646,11 @@ mod tests {
             synapse_states: Vec::new(),
         };
 
-        let group_result_0 = PartitionGroupResult {
-            spiking_nids: Vec::new(),
-            synaptic_transmission_count: 0,
-            partition_state_snapshots: Some(vec![partition_snapshot_0, partition_snapshot_2]),
-        };
+        let group_snapshots_0 = vec![partition_snapshot_0, partition_snapshot_2];
+        let group_snapshots_1 = vec![partition_snapshot_1];
+        let group_snapshots = vec![group_snapshots_0, group_snapshots_1];
 
-        let group_result_1 = PartitionGroupResult {
-            spiking_nids: Vec::new(),
-            synaptic_transmission_count: 0,
-            partition_state_snapshots: Some(vec![partition_snapshot_1]),
-        };
-
-        let group_results = vec![group_result_0, group_result_1];
-
-        let state_snapshot = aggregate_state_snapshot(group_results);
+        let state_snapshot = aggregate_state_snapshot(group_snapshots);
 
         for (index, snapshot) in state_snapshot.neuron_states.iter().enumerate() {
             let expected_value = index as f32;
@@ -782,9 +808,8 @@ mod tests {
         tick_input.force_spiking_nids = vec![1];
         instance.tick(&tick_input).unwrap();
 
-        let mut tick_input = TickInput::ephemeral_state_reset();
-        tick_input.extract_state_snapshot = true;
-        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+        instance.reset_ephemeral_state();
+        let state_snapshot = instance.extract_state_snapshot();
         assert!(!state_snapshot.neuron_states[1].is_refractory);
         assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
         assert_approx_eq!(f32, state_snapshot.neuron_states[1].threshold, 1.0);
@@ -803,9 +828,8 @@ mod tests {
         tick_input.force_spiking_nids = vec![0];
         instance.tick(&tick_input).unwrap();
         instance.tick_no_input();
-        tick_input.reset();
-        tick_input.extract_state_snapshot = true;
-        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+        instance.tick_no_input();
+        let state_snapshot = instance.extract_state_snapshot();
 
         assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.25);
 
@@ -815,17 +839,15 @@ mod tests {
         instance.tick_no_input();
 
         // check that the transmission buffer gets cleared as well
-        tick_input.reset();
-        tick_input.reset_ephemeral_state = true;
-        tick_input.extract_state_snapshot = true;
-        let state_snapshot = instance.tick(&tick_input).unwrap().state_snapshot.unwrap();
+        instance.reset_ephemeral_state();
+        let state_snapshot = instance.extract_state_snapshot();
         assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
 
         tick_input.reset();
         tick_input.force_spiking_nids = vec![1];
         instance.tick(&tick_input).unwrap();
         tick_input.reset();
-        tick_input.reset_ephemeral_state = true;
+        instance.reset_ephemeral_state();
         let tick_result = instance.tick(&tick_input).unwrap();
         assert!(tick_result.spiking_nids.is_empty());
     }

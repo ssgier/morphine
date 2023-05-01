@@ -54,11 +54,10 @@ fn main() {
 
     tick_input.reset();
     tick_input.reward = reward;
-    tick_input.extract_state_snapshot = true;
 
     let tick_result = instance.tick(&tick_input).unwrap();
 
-    let state_snapshot = tick_result.state_snapshot.unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
 
     let voltage_checksum: f64 = state_snapshot
         .neuron_states

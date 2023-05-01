@@ -17,12 +17,6 @@ fn tick(instance: &mut Instance, in_channel_ids: &[usize]) -> TickResult {
         .unwrap()
 }
 
-fn tick_extract_snapshot(instance: &mut Instance, in_channel_ids: &[usize]) -> TickResult {
-    let mut tick_input = TickInput::from_spiking_in_channel_ids(in_channel_ids);
-    tick_input.extract_state_snapshot = true;
-    instance.tick(&tick_input).unwrap()
-}
-
 fn make_simple_1_in_1_out_instance(weight: f32) -> Instance {
     let mut params = InstanceParams::default();
     let mut layer = LayerParams::default();
@@ -113,12 +107,14 @@ fn missed_spike_after_leakage() {
     assert!(tick_1_result.spiking_out_channel_ids.is_empty());
 
     // spike is missed, but voltaged is close to threshold
-    let tick_2_result = tick_extract_snapshot(&mut instance, &[]);
+    let tick_2_result = tick(&mut instance, &[]);
     assert!(tick_2_result.spiking_out_channel_ids.is_empty());
+
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert_approx_eq!(
         f32,
-        tick_2_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         0.5 * (-1.0 / 10.0f32).exp() + 0.5
     );
 }
@@ -129,22 +125,17 @@ fn voltage_trajectory() {
 
     tick(&mut instance, &[0]);
 
-    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
-    assert_approx_eq!(
-        f32,
-        tick_1_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.5
-    );
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.5);
 
-    for _ in 0..4 {
-        instance.tick_no_input();
-    }
+    instance.tick_no_input_until(7);
 
-    let tick_6_result = tick_extract_snapshot(&mut instance, &[]);
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert_approx_eq!(
         f32,
-        tick_6_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         0.5 * (-5.0 / 10.0f32).exp()
     );
 }
@@ -156,23 +147,17 @@ fn no_psp_during_refractory_period() {
     // make neuron 1 fire one tick later
     tick(&mut instance, &[0, 0]);
 
-    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
-    assert_approx_eq!(
-        f32,
-        tick_1_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.0
-    );
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
 
     tick(&mut instance, &[0]);
 
-    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     // neuron 1 is in refractory period
-    assert_approx_eq!(
-        f32,
-        tick_3_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.0
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
 
     while instance.get_tick_period() < 9 {
         instance.tick_no_input();
@@ -180,22 +165,15 @@ fn no_psp_during_refractory_period() {
 
     // too early to cause a psp
     tick(&mut instance, &[0]);
+    tick(&mut instance, &[0]);
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
 
-    let tick_10_result = tick_extract_snapshot(&mut instance, &[0]);
-    assert_approx_eq!(
-        f32,
-        tick_10_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.0
-    );
-
-    let tick_11_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     // neuron 1 is not in refractory period anymore
-    assert_approx_eq!(
-        f32,
-        tick_11_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        0.5
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.5);
 }
 
 #[test]
@@ -236,17 +214,14 @@ fn two_epsps_and_one_ipsp() {
     let tick_2_result = tick(&mut instance, &[]);
 
     assert_equal(tick_2_result.spiking_nids, [1]);
-    assert_equal(tick_2_result.spiking_out_channel_ids, []);
+    assert_equal(tick_2_result.spiking_out_channel_ids, [] as [usize; 0]);
 
-    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
+    let tick_3_result = instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert!(tick_3_result.spiking_nids.is_empty());
     assert!(tick_3_result.spiking_out_channel_ids.is_empty());
-    assert_approx_eq!(
-        f32,
-        tick_3_result.state_snapshot.unwrap().neuron_states[2].voltage,
-        0.9
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[2].voltage, 0.9);
 }
 
 #[test]
@@ -274,14 +249,11 @@ fn voltage_floor() {
     // double tick on channel 0
     tick(&mut instance, &[0, 0]);
 
-    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     // voltage floored at -0.6
-    assert_approx_eq!(
-        f32,
-        tick_1_result.state_snapshot.unwrap().neuron_states[1].voltage,
-        -0.6
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, -0.6);
 }
 
 #[test]
@@ -343,20 +315,19 @@ fn simple_potentiation_long_term_stdp() {
 
     tick(&mut instance, &[0]);
     instance.tick_no_input(); // nid 1 spikes
-    let tick_2_result = tick_extract_snapshot(&mut instance, &[0]);
-    assert_approx_eq!(
-        f32,
-        tick_2_result.state_snapshot.unwrap().synapse_states[0].weight,
-        1.1
-    );
 
-    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
+    tick(&mut instance, &[0]);
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.synapse_states[0].weight, 1.1);
 
+    let tick_3_result = instance.tick_no_input();
     assert!(tick_3_result.spiking_out_channel_ids.is_empty());
 
+    let state_snapshot = instance.extract_state_snapshot();
+
     assert_approx_eq!(
         f32,
-        tick_3_result.state_snapshot.as_ref().unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         1.1 // increased psp after potentiation
     );
 }
@@ -424,19 +395,20 @@ fn simple_potentiation_short_term_stdp() {
 
     tick(&mut instance, &[0]);
 
-    let tick_3_result = tick_extract_snapshot(&mut instance, &[]);
-
+    let tick_3_result = instance.tick_no_input();
     assert!(tick_3_result.spiking_out_channel_ids.is_empty());
+
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert_approx_eq!(
         f32,
-        tick_3_result.state_snapshot.as_ref().unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         1.0 + 0.1 * (-3.0f32).exp()
     );
 
     assert_approx_eq!(
         f32,
-        tick_3_result.state_snapshot.unwrap().synapse_states[0].weight,
+        state_snapshot.synapse_states[0].weight,
         1.0 // unchanged long term weight
     );
 }
@@ -470,37 +442,23 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
     tick(&mut instance, &[1]);
 
     instance.tick_no_input_until(20);
-    let tick_20_result = tick_extract_snapshot(&mut instance, &[0]);
+    tick(&mut instance, &[0]);
+    let state_snapshot = instance.extract_state_snapshot();
 
-    assert_eq!(
-        tick_20_result
-            .state_snapshot
-            .as_ref()
-            .unwrap()
-            .synapse_states[1]
-            .pre_syn_nid,
-        0
-    );
-    assert_eq!(
-        tick_20_result
-            .state_snapshot
-            .as_ref()
-            .unwrap()
-            .synapse_states[1]
-            .post_syn_nid,
-        1
-    );
+    assert_eq!(state_snapshot.synapse_states[1].pre_syn_nid, 0);
+    assert_eq!(state_snapshot.synapse_states[1].post_syn_nid, 1);
 
     assert_approx_eq!(
         f32,
-        tick_20_result.state_snapshot.unwrap().synapse_states[1].weight,
+        state_snapshot.synapse_states[1].weight,
         0.5 // synapse potentiated, but only once
     );
 
-    let tick_21_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(
         f32,
-        tick_21_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         0.5 // synapse potentiated, but only once
     );
 }
@@ -549,7 +507,8 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
     instance.tick_no_input(); // psp arrives at tick 8, does not contribute to stdp
     tick(&mut instance, &[1]);
 
-    let tick_10_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     let expected_lt_stdp_value_tick_6 = -0.11 * (-6.0 / 25.0f32).exp();
     let expected_st_stdp_value_tick_6 = -0.06 * (-6.0 / 20.0f32).exp();
@@ -559,11 +518,7 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
 
     let expected_psp = expected_weight + expected_st_stdp_offset_tick_10;
 
-    assert_approx_eq!(
-        f32,
-        tick_10_result.state_snapshot.unwrap().neuron_states[0].voltage,
-        expected_psp
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[0].voltage, expected_psp);
 }
 
 #[test]
@@ -599,7 +554,8 @@ fn stdp_alternating_pre_post_syn_spikes() {
     tick(&mut instance, &[0]); // psp at t = 33
     instance.tick_no_input_until(33);
 
-    let tick_33_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     let tick_11_stdp = -0.11 * (-11.0 / 25.0f32).exp();
     let tick_12_stdp = 0.1 * (-1.0 / 20.0f32).exp();
@@ -608,7 +564,7 @@ fn stdp_alternating_pre_post_syn_spikes() {
 
     assert_approx_eq!(
         f32,
-        tick_33_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         expected_weight
     );
 }
@@ -655,10 +611,13 @@ fn long_term_stdp_complex_scenario() {
 
     tick(&mut instance, &[9]);
 
-    let tick_26_result = tick_extract_snapshot(&mut instance, &[9]);
+    tick(&mut instance, &[9]);
+
+    let state_snapshot = instance.extract_state_snapshot();
+
     assert_approx_eq!(
         f32,
-        tick_26_result.state_snapshot.unwrap().neuron_states[19].voltage,
+        state_snapshot.neuron_states[19].voltage,
         0.6 // synapse potentiated
     );
 
@@ -674,13 +633,10 @@ fn long_term_stdp_complex_scenario() {
 
     instance.tick_no_input_until(39);
 
-    let tick_39_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
-    assert_approx_eq!(
-        f32,
-        tick_39_result.state_snapshot.unwrap().neuron_states[19].voltage,
-        0.6
-    );
+    assert_approx_eq!(f32, state_snapshot.neuron_states[19].voltage, 0.6);
 
     let tick_40_result = instance.tick_no_input();
     assert_equal(tick_40_result.spiking_out_channel_ids, [9]);
@@ -689,10 +645,11 @@ fn long_term_stdp_complex_scenario() {
     tick(&mut instance, &[5]);
     instance.tick_no_input_until(55);
 
-    let tick_55_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(
         f32,
-        tick_55_result.state_snapshot.unwrap().neuron_states[19].voltage,
+        state_snapshot.neuron_states[19].voltage,
         0.5 - 0.11 * (-2.0 / 25.0f32).exp() // synapse depressed
     );
 
@@ -707,10 +664,11 @@ fn long_term_stdp_complex_scenario() {
     tick(&mut instance, &[6]);
     instance.tick_no_input_until(74);
 
-    let tick_74_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(
         f32,
-        tick_74_result.state_snapshot.unwrap().neuron_states[19].voltage,
+        state_snapshot.neuron_states[19].voltage,
         0.5 // unaltered synapse
     );
 }
@@ -747,10 +705,11 @@ fn no_dopamine() {
     instance.tick_no_input_until(1500);
     tick(&mut instance, &[0]);
 
-    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(
         f32,
-        tick_1501_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         0.5 // unchanged synapse
     );
 }
@@ -782,13 +741,12 @@ fn negative_reward() {
     tick(&mut instance, &[0]);
     tick(&mut instance, &[]);
 
-    let mut tick_input = TickInput::from_reward(-1.0);
-    tick_input.extract_state_snapshot = true;
-    let tick_result = instance.tick(&tick_input).unwrap();
+    let tick_input = TickInput::from_reward(-1.0);
+    instance.tick(&tick_input).unwrap();
 
     let expected_depression = 0.1 * (-1.0 / 15.0f32).exp();
 
-    let synapse_states = tick_result.state_snapshot.unwrap().synapse_states;
+    let synapse_states = instance.extract_state_snapshot().synapse_states;
     assert_approx_eq!(f32, synapse_states[0].weight, 1.0 - expected_depression);
 }
 
@@ -829,23 +787,26 @@ fn simple_dopamine_scenario() {
 
     instance.tick_no_input_until(1500);
 
-    let tick_1500_result = tick_extract_snapshot(&mut instance, &[0]);
+    tick(&mut instance, &[0]);
+
+    let state_snapshot = instance.extract_state_snapshot();
 
     let stdp_value = 0.2; // 2 * 0.1 (two transmissions at same synapse)
-    let elig_trace_value = 1.5 * (-59.0 / 1000f32).exp();
+    let elig_trace_value = 1.5 * (-58.0 / 1000f32).exp();
     let expected_weight = 0.5 + 0.3 * stdp_value * elig_trace_value;
 
     assert_approx_eq!(
         f32,
-        tick_1500_result.state_snapshot.unwrap().synapse_states[0].weight,
+        state_snapshot.synapse_states[0].weight,
         expected_weight
     );
 
-    let tick_1501_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert_approx_eq!(
         f32,
-        tick_1501_result.state_snapshot.unwrap().neuron_states[1].voltage,
+        state_snapshot.neuron_states[1].voltage,
         expected_weight
     );
 }
@@ -877,53 +838,46 @@ fn short_term_plasticity() {
 
     tick(&mut instance, &[0]);
 
-    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
-    assert_approx_eq!(
-        f32,
-        tick_1_result.state_snapshot.unwrap().neuron_states[2].voltage,
-        0.5 * 0.8
-    );
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[2].voltage, 0.5 * 0.8);
 
     instance.tick_no_input_until(6);
 
-    let tick_6_result = tick_extract_snapshot(&mut instance, &[]);
-    assert_approx_eq!(
-        f32,
-        tick_6_result.state_snapshot.unwrap().neuron_states[3].voltage,
-        0.5 * 0.8
-    );
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[3].voltage, 0.5 * 0.8);
 
     instance.tick_no_input_until(500); // let voltages decay to near zero
 
     tick(&mut instance, &[1]);
-    let tick_8_result = tick_extract_snapshot(&mut instance, &[]);
-    assert_approx_eq!(
-        f32,
-        tick_8_result.state_snapshot.unwrap().neuron_states[3].voltage,
-        0.5 * 0.8
-    );
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
+    assert_approx_eq!(f32, state_snapshot.neuron_states[3].voltage, 0.5 * 0.8);
 
     instance.tick_no_input_until(1000);
 
     // both outgoing synapses of nid 0 are still depressed
     tick(&mut instance, &[0]);
-    let tick_1001_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     let expected_stp_factor = 0.8 * (1.0 - 0.6 * (-1000.0 / 800.0f32).exp());
 
     assert_approx_eq!(
         f32,
-        tick_1001_result.state_snapshot.unwrap().neuron_states[2].voltage,
+        state_snapshot.neuron_states[2].voltage,
         0.5 * expected_stp_factor
     );
 
     instance.tick_no_input_until(1006);
 
-    let tick_1006_result = tick_extract_snapshot(&mut instance, &[]);
+    instance.tick_no_input();
+    let state_snapshot = instance.extract_state_snapshot();
 
     assert_approx_eq!(
         f32,
-        tick_1006_result.state_snapshot.unwrap().neuron_states[3].voltage,
+        state_snapshot.neuron_states[3].voltage,
         0.5 * expected_stp_factor
     );
 }
@@ -1051,18 +1005,20 @@ fn assert_equivalence(
         }
     }
     tick_input.reset();
-    tick_input.extract_state_snapshot = true;
 
-    let mut tick_results = instances
+    instances
         .iter_mut()
         .map(|instance| instance.tick(&tick_input).unwrap())
         .collect_vec();
 
-    let cmp_result = tick_results.pop().unwrap();
-    let cmp_state_snapshot = cmp_result.state_snapshot.unwrap();
+    let mut state_snapshots = instances
+        .iter_mut()
+        .map(|instance| instance.extract_state_snapshot())
+        .collect_vec();
 
-    for tick_result in tick_results {
-        let state_snapshot = tick_result.state_snapshot.unwrap();
+    let cmp_state_snapshot = state_snapshots.pop().unwrap();
+
+    for state_snapshot in state_snapshots {
         for (neuron_state, cmp_neuron_state) in state_snapshot
             .neuron_states
             .iter()
@@ -1245,12 +1201,12 @@ fn state_snapshot() {
     let mut instance = create_instance(params).unwrap();
     tick(&mut instance, &[0]);
 
-    let tick_1_result = tick_extract_snapshot(&mut instance, &[]);
+    let tick_1_result = tick(&mut instance, &[]);
 
     assert_equal(tick_1_result.spiking_nids, [5, 6]);
     assert_equal(tick_1_result.spiking_out_channel_ids, [0, 1]);
 
-    let state_snapshot = tick_1_result.state_snapshot.unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
     for i in 1..5 {
         assert_eq!(state_snapshot.synapse_states[i].pre_syn_nid, 0);
         assert_eq!(state_snapshot.synapse_states[i].post_syn_nid, i);
@@ -1293,9 +1249,7 @@ fn no_self_innervation() {
 
     let mut instance = create_instance(params).unwrap();
 
-    // currently the only way to extract synapse info is via state snapshot in the tick result
-    let tick_result = tick_extract_snapshot(&mut instance, &[]);
-    let state_snapshot = tick_result.state_snapshot.unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
 
     for synapse_state in state_snapshot.synapse_states {
         assert_ne!(synapse_state.pre_syn_nid, synapse_state.post_syn_nid);
@@ -1345,10 +1299,10 @@ fn multiple_projections_same_layer_pair() {
     instance.tick(&tick_input).unwrap();
 
     instance.tick_no_input_until(50);
+    instance.tick_no_input();
 
-    let syn_states_from_1 = tick_extract_snapshot(&mut instance, &[])
-        .state_snapshot
-        .unwrap()
+    let syn_states_from_1 = instance
+        .extract_state_snapshot()
         .synapse_states
         .into_iter()
         .filter(|syn_state| syn_state.pre_syn_nid == 1)
