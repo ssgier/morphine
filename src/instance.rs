@@ -1,3 +1,4 @@
+use crate::api::SCMode;
 use crate::params;
 use crate::params::InstanceParams;
 use crate::partition;
@@ -14,6 +15,7 @@ use itertools::Itertools;
 use num_cpus;
 use simple_error::SimpleResult;
 use simple_error::{try_with, SimpleError};
+use std::collections::HashSet;
 use std::sync::mpsc::channel as mpsc_channel;
 use std::sync::mpsc::Receiver as MpscReceiver;
 use std::thread;
@@ -30,6 +32,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
     let (partition_result_tx, partition_result_rx) = mpsc_channel();
     let (partition_snapshots_tx, partition_snapshots_rx) = mpsc_channel();
     let (partition_ack_tx, partition_ack_rx) = mpsc_channel();
+    let (partition_sc_hashes_tx, partition_sc_hashes_rx) = mpsc_channel();
 
     let num_threads = get_num_threads(&params);
     let mut join_handles = Vec::new();
@@ -39,6 +42,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         let partition_result_tx = partition_result_tx.clone();
         let partition_snapshots_tx = partition_snapshots_tx.clone();
         let partition_ack_tx = partition_ack_tx.clone();
+        let partition_sc_hashes_tx = partition_sc_hashes_tx.clone();
         let params = params.clone();
 
         join_handles.push(thread::spawn(move || {
@@ -54,6 +58,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
                 partition_result_tx,
                 partition_snapshots_tx,
                 partition_ack_tx,
+                partition_sc_hashes_tx,
             );
         }));
     }
@@ -83,6 +88,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         partition_result_rx,
         partition_snapshots_rx,
         partition_ack_rx,
+        partition_sc_hashes_rx,
         num_partitions: num_threads,
         tick_period: 0,
         join_handles,
@@ -191,6 +197,7 @@ pub struct Instance {
     partition_result_rx: MpscReceiver<PartitionGroupResult>,
     partition_snapshots_rx: MpscReceiver<Vec<PartitionStateSnapshot>>,
     partition_ack_rx: MpscReceiver<()>,
+    partition_sc_hashes_rx: MpscReceiver<HashSet<u64>>,
     num_partitions: usize,
     tick_period: usize,
     join_handles: Vec<JoinHandle<()>>,
@@ -319,6 +326,24 @@ impl Instance {
         }
     }
 
+    pub fn set_sc_mode(&mut self, sc_mode: SCMode) {
+        self.broadcast_tx
+            .as_mut()
+            .unwrap()
+            .broadcast(Request::SetSCMode(sc_mode))
+    }
+
+    pub fn flush_sc_hashes(&mut self) -> HashSet<u64> {
+        self.broadcast_tx
+            .as_mut()
+            .unwrap()
+            .broadcast(Request::FlushSCHashes);
+
+        (0..self.num_partitions)
+            .flat_map(|_ignored| self.partition_sc_hashes_rx.recv().unwrap().into_iter())
+            .collect()
+    }
+
     fn validate_tick_input(&self, tick_input: &TickInput) -> SimpleResult<()> {
         for in_channel_id in &tick_input.spiking_in_channel_ids {
             if *in_channel_id >= self.num_in_channels {
@@ -385,6 +410,7 @@ mod tests {
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
         let (_, partition_snapshots_rx) = mpsc_channel();
         let (_, partition_ack_rx) = mpsc_channel();
+        let (_, partition_sc_hashes_rx) = mpsc_channel();
 
         let spiking_in_channel_id = 3;
         let channel_mapped_nid = 3;
@@ -404,6 +430,7 @@ mod tests {
             partition_result_rx,
             partition_snapshots_rx,
             partition_ack_rx,
+            partition_sc_hashes_rx,
             num_partitions,
             tick_period: 0,
             join_handles: Vec::new(),
@@ -467,9 +494,7 @@ mod tests {
         assert_eq!(instance.get_tick_period(), 2);
 
         for join_handle in join_handles {
-            if let (Request::Tick(ctx_1st), Request::Tick(ctx_2nd)) =
-                join_handle.join().unwrap()
-            {
+            if let (Request::Tick(ctx_1st), Request::Tick(ctx_2nd)) = join_handle.join().unwrap() {
                 assert_eq!(ctx_1st.spike_trigger_nids, [channel_mapped_nid]);
                 assert_eq!(ctx_1st.spiked_nids, [] as [usize; 0]);
                 assert_eq!(ctx_2nd.spike_trigger_nids, [] as [usize; 0]);
@@ -488,6 +513,7 @@ mod tests {
         let (partition_result_tx, partition_result_rx) = mpsc_channel();
         let (_, partition_snapshots_rx) = mpsc_channel();
         let (_, partition_ack_rx) = mpsc_channel();
+        let (_, partition_sc_hashes_rx) = mpsc_channel();
         let mut out_nid_channel_mapping = HashMap::default();
 
         for i in 0..10 {
@@ -507,6 +533,7 @@ mod tests {
             partition_result_rx,
             partition_snapshots_rx,
             partition_ack_rx,
+            partition_sc_hashes_rx,
             num_partitions,
             tick_period: 0,
             join_handles: Vec::new(),

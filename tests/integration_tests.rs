@@ -1,6 +1,10 @@
+use std::collections::HashSet;
+use std::{collections::hash_map::DefaultHasher, hash::Hasher};
+
 use float_cmp::assert_approx_eq;
 use itertools::{assert_equal, Itertools};
 use morphine::{
+    api::SCMode,
     instance::{self, create_instance, Instance, TickInput, TickResult},
     params::{
         InitialSynWeight, InstanceParams, LayerConnectionParams, LayerParams,
@@ -1327,4 +1331,109 @@ fn multiple_projections_same_layer_pair() {
         syn_states_from_1[4].short_term_stdp_offset,
         0.1 * (-49f32 / 500.0).exp()
     );
+}
+
+fn compute_sc_hash_single(pre_syn_nid: usize, post_syn_nid: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hasher.write_usize(pre_syn_nid);
+    hasher.write_usize(post_syn_nid);
+    hasher.finish()
+}
+
+fn compute_sc_hash_multi(pre_syn_nids: &[usize], post_syn_nid: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+
+    for pre_syn_nid in pre_syn_nids {
+        hasher.write_usize(*pre_syn_nid);
+    }
+
+    hasher.write_usize(post_syn_nid);
+    hasher.finish()
+}
+
+#[test]
+fn sc_hashes_single() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 4;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    connection.conduction_delay_position_distance_scale_factor = 1.0;
+
+    params.layer_connections.push(connection);
+    params.technical_params.num_threads = Some(2);
+
+    let mut instance = create_instance(params).unwrap();
+    instance.set_sc_mode(SCMode::Single);
+
+    tick(&mut instance, &[1, 3]);
+
+    let tick_2_result = instance.tick_no_input();
+    assert_equal(tick_2_result.spiking_nids, [6]);
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.extend([4, 7]);
+
+    instance.tick(&tick_input).unwrap();
+
+    let sc_hashes = instance.flush_sc_hashes();
+
+    let expected_sc_hashes = HashSet::from([
+        compute_sc_hash_single(1, 4),
+        compute_sc_hash_single(3, 4),
+        compute_sc_hash_single(1, 6),
+        compute_sc_hash_single(3, 6),
+        compute_sc_hash_single(1, 7),
+        compute_sc_hash_single(3, 7),
+    ]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
+    assert!(instance.flush_sc_hashes().is_empty());
+}
+
+#[test]
+fn sc_hashes_multi() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 4;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    connection.conduction_delay_position_distance_scale_factor = 1.0;
+
+    params.layer_connections.push(connection);
+    params.technical_params.num_threads = Some(2);
+
+    let mut instance = create_instance(params).unwrap();
+    instance.set_sc_mode(SCMode::Multi);
+
+    tick(&mut instance, &[1, 3]);
+
+    let tick_2_result = instance.tick_no_input();
+    assert_equal(tick_2_result.spiking_nids, [6]);
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.extend([4, 7]);
+
+    instance.tick(&tick_input).unwrap();
+
+    let sc_hashes = instance.flush_sc_hashes();
+
+    let expected_sc_hashes = HashSet::from([
+        compute_sc_hash_multi(&[], 1),
+        compute_sc_hash_multi(&[], 3),
+        compute_sc_hash_multi(&[1, 3], 4),
+        compute_sc_hash_multi(&[1, 3], 6),
+        compute_sc_hash_multi(&[3, 1], 7),
+    ]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
+    assert!(instance.flush_sc_hashes().is_empty());
 }

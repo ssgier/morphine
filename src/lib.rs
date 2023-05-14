@@ -1,3 +1,4 @@
+pub mod api;
 pub mod instance;
 pub mod params;
 pub mod state_snapshot;
