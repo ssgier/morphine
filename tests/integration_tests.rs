@@ -133,7 +133,7 @@ fn voltage_trajectory() {
     let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.5);
 
-    instance.tick_no_input_until(7);
+    instance.tick_no_input_until_inclusive(7);
 
     let state_snapshot = instance.extract_state_snapshot();
 
@@ -163,7 +163,7 @@ fn no_psp_during_refractory_period() {
     // neuron 1 is in refractory period
     assert_approx_eq!(f32, state_snapshot.neuron_states[1].voltage, 0.0);
 
-    while instance.get_tick_period() < 9 {
+    while instance.get_last_tick_period() < 9 {
         instance.tick_no_input();
     }
 
@@ -442,10 +442,10 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
     tick(&mut instance, &[0]);
 
     tick(&mut instance, &[1]);
-    instance.tick_no_input_until(3);
+    instance.tick_no_input_until_inclusive(3);
     tick(&mut instance, &[1]);
 
-    instance.tick_no_input_until(20);
+    instance.tick_no_input_until_inclusive(20);
     tick(&mut instance, &[0]);
     let state_snapshot = instance.extract_state_snapshot();
 
@@ -548,15 +548,15 @@ fn stdp_alternating_pre_post_syn_spikes() {
     let mut instance = create_instance(params).unwrap();
 
     tick(&mut instance, &[1]);
-    instance.tick_no_input_until(8);
+    instance.tick_no_input_until_inclusive(8);
     tick(&mut instance, &[0]); // psp at t = 11
-    instance.tick_no_input_until(12);
+    instance.tick_no_input_until_inclusive(12);
     tick(&mut instance, &[1]);
-    instance.tick_no_input_until(21);
+    instance.tick_no_input_until_inclusive(21);
     tick(&mut instance, &[0]); // psp at t = 24
-    instance.tick_no_input_until(30);
+    instance.tick_no_input_until_inclusive(30);
     tick(&mut instance, &[0]); // psp at t = 33
-    instance.tick_no_input_until(33);
+    instance.tick_no_input_until_inclusive(33);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
@@ -599,19 +599,19 @@ fn long_term_stdp_complex_scenario() {
     let mut instance = create_instance(params).unwrap();
 
     tick(&mut instance, &[0]);
-    instance.tick_no_input_until(8);
+    instance.tick_no_input_until_inclusive(8);
 
     //this spike will arrive at t = 13, after the post-synaptic spike -> depression
     tick(&mut instance, &[5]);
 
-    instance.tick_no_input_until(10);
+    instance.tick_no_input_until_inclusive(10);
     tick(&mut instance, &[9]);
 
     // spikes from neuron 0 and 9 should arrive at neuron 19 (output channel 9) simultaneously
     let tick_11_result = instance.tick_no_input();
     assert_equal(tick_11_result.spiking_out_channel_ids, [9]);
 
-    instance.tick_no_input_until(25);
+    instance.tick_no_input_until_inclusive(25);
 
     tick(&mut instance, &[9]);
 
@@ -635,7 +635,7 @@ fn long_term_stdp_complex_scenario() {
     // cause as spike at nid 19 later on to bring it back to reset voltage
     tick(&mut instance, &[0]);
 
-    instance.tick_no_input_until(39);
+    instance.tick_no_input_until_inclusive(39);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
@@ -645,9 +645,9 @@ fn long_term_stdp_complex_scenario() {
     let tick_40_result = instance.tick_no_input();
     assert_equal(tick_40_result.spiking_out_channel_ids, [9]);
 
-    instance.tick_no_input_until(50);
+    instance.tick_no_input_until_inclusive(50);
     tick(&mut instance, &[5]);
-    instance.tick_no_input_until(55);
+    instance.tick_no_input_until_inclusive(55);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
@@ -662,11 +662,11 @@ fn long_term_stdp_complex_scenario() {
     let tick_57_result = instance.tick_no_input();
     assert_equal(tick_57_result.spiking_out_channel_ids, [9]);
 
-    instance.tick_no_input_until(70);
+    instance.tick_no_input_until_inclusive(70);
 
     // psp will arrive at t = 74
     tick(&mut instance, &[6]);
-    instance.tick_no_input_until(74);
+    instance.tick_no_input_until_inclusive(74);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
@@ -706,7 +706,7 @@ fn no_dopamine() {
 
     tick(&mut instance, &[0, 0]);
     instance.tick_no_input(); // nid 1 spikes
-    instance.tick_no_input_until(1500);
+    instance.tick_no_input_until_inclusive(1500);
     tick(&mut instance, &[0]);
 
     instance.tick_no_input();
@@ -784,12 +784,12 @@ fn simple_dopamine_scenario() {
     // two tick at nid 0 cause tick at nid 1 next cycle, creating an eligibility trace
     tick(&mut instance, &[0, 0]);
 
-    instance.tick_no_input_until(53);
+    instance.tick_no_input_until_inclusive(53);
 
     // dopamine released at t = 60
     instance.tick(&TickInput::from_reward(1.5)).unwrap();
 
-    instance.tick_no_input_until(1500);
+    instance.tick_no_input_until_inclusive(1500);
 
     tick(&mut instance, &[0]);
 
@@ -846,20 +846,20 @@ fn short_term_plasticity() {
     let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(f32, state_snapshot.neuron_states[2].voltage, 0.5 * 0.8);
 
-    instance.tick_no_input_until(6);
+    instance.tick_no_input_until_inclusive(6);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(f32, state_snapshot.neuron_states[3].voltage, 0.5 * 0.8);
 
-    instance.tick_no_input_until(500); // let voltages decay to near zero
+    instance.tick_no_input_until_inclusive(500); // let voltages decay to near zero
 
     tick(&mut instance, &[1]);
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
     assert_approx_eq!(f32, state_snapshot.neuron_states[3].voltage, 0.5 * 0.8);
 
-    instance.tick_no_input_until(1000);
+    instance.tick_no_input_until_inclusive(1000);
 
     // both outgoing synapses of nid 0 are still depressed
     tick(&mut instance, &[0]);
@@ -874,7 +874,7 @@ fn short_term_plasticity() {
         0.5 * expected_stp_factor
     );
 
-    instance.tick_no_input_until(1006);
+    instance.tick_no_input_until_inclusive(1006);
 
     instance.tick_no_input();
     let state_snapshot = instance.extract_state_snapshot();
@@ -1302,7 +1302,7 @@ fn multiple_projections_same_layer_pair() {
     tick_input.force_spiking_nids.push(4);
     instance.tick(&tick_input).unwrap();
 
-    instance.tick_no_input_until(50);
+    instance.tick_no_input_until_inclusive(50);
     instance.tick_no_input();
 
     let syn_states_from_1 = instance

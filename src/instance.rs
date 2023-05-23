@@ -90,7 +90,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         partition_ack_rx,
         partition_sc_hashes_rx,
         num_partitions: num_threads,
-        tick_period: 0,
+        last_tick_period: 0,
         join_handles,
     })
 }
@@ -199,7 +199,7 @@ pub struct Instance {
     partition_ack_rx: MpscReceiver<()>,
     partition_sc_hashes_rx: MpscReceiver<HashSet<u64>>,
     num_partitions: usize,
-    tick_period: usize,
+    last_tick_period: usize,
     join_handles: Vec<JoinHandle<()>>,
 }
 
@@ -224,7 +224,7 @@ impl Instance {
     }
 
     pub fn tick(&mut self, tick_input: &TickInput) -> SimpleResult<TickResult> {
-        self.tick_period += 1;
+        self.last_tick_period += 1;
 
         self.validate_tick_input(tick_input)?;
 
@@ -241,7 +241,7 @@ impl Instance {
 
         let dopamine_amount = tick_input.reward; // to be revised. There might be an indirection via dopaminergic neurons
 
-        let t = self.tick_period;
+        let t = self.last_tick_period;
         let ctx = Request::Tick(TickContext {
             t,
             spike_trigger_nids,
@@ -284,14 +284,24 @@ impl Instance {
         self.tick(&EMPTY_TICK_INPUT).unwrap()
     }
 
-    pub fn tick_no_input_until(&mut self, t: usize) {
-        while self.get_tick_period() < t {
+    pub fn tick_no_input_until_inclusive(&mut self, t: usize) {
+        while self.get_last_tick_period() < t {
             self.tick_no_input();
         }
     }
 
-    pub fn get_tick_period(&self) -> usize {
-        self.tick_period
+    pub fn tick_no_input_until_exclusive(&mut self, t: usize) {
+        while self.get_next_tick_period() < t {
+            self.tick_no_input();
+        }
+    }
+
+    pub fn get_last_tick_period(&self) -> usize {
+        self.last_tick_period
+    }
+
+    pub fn get_next_tick_period(&self) -> usize {
+        self.last_tick_period + 1
     }
 
     pub fn extract_state_snapshot(&mut self) -> StateSnapshot {
@@ -299,7 +309,7 @@ impl Instance {
             .as_mut()
             .unwrap()
             .broadcast(Request::ExtractStateSnapshot {
-                t: self.tick_period,
+                t: self.last_tick_period,
             });
 
         let mut partition_group_snapshots = Vec::new();
@@ -318,7 +328,7 @@ impl Instance {
             .as_mut()
             .unwrap()
             .broadcast(Request::ResetEphemeralState {
-                t: self.tick_period,
+                t: self.last_tick_period,
             });
 
         for _ in 0..self.num_partitions {
@@ -432,7 +442,7 @@ mod tests {
             partition_ack_rx,
             partition_sc_hashes_rx,
             num_partitions,
-            tick_period: 0,
+            last_tick_period: 0,
             join_handles: Vec::new(),
         };
 
@@ -485,13 +495,13 @@ mod tests {
             [spiking_out_channel_id]
         );
         assert_eq!(instance.spiking_nid_buffer, [spiking_nid]);
-        assert_eq!(instance.get_tick_period(), 1);
+        assert_eq!(instance.get_last_tick_period(), 1);
 
         // second cycle
         let tick_result = instance.tick_no_input();
         assert!(tick_result.spiking_out_channel_ids.is_empty());
         assert!(instance.spiking_nid_buffer.is_empty());
-        assert_eq!(instance.get_tick_period(), 2);
+        assert_eq!(instance.get_last_tick_period(), 2);
 
         for join_handle in join_handles {
             if let (Request::Tick(ctx_1st), Request::Tick(ctx_2nd)) = join_handle.join().unwrap() {
@@ -535,7 +545,7 @@ mod tests {
             partition_ack_rx,
             partition_sc_hashes_rx,
             num_partitions,
-            tick_period: 0,
+            last_tick_period: 0,
             join_handles: Vec::new(),
         };
 
@@ -849,7 +859,7 @@ mod tests {
         tick_input.reset();
         tick_input.reward = 1.0;
         instance.tick(&tick_input).unwrap();
-        instance.tick_no_input_until(210);
+        instance.tick_no_input_until_inclusive(210);
 
         tick_input.reset();
         tick_input.force_spiking_nids = vec![0];
