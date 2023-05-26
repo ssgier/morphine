@@ -115,11 +115,11 @@ impl PlasticityModulator {
         }
     }
 
-    pub fn process_stdp_value(&mut self, t: usize, syn_coord: SynapseCoordinate, stdp_value: f32) {
+    pub fn process_stdp_value(&mut self, t: usize, syn_coord: &SynapseCoordinate, stdp_value: f32) {
         self.elig_traces.push_back(EligibilityTrace {
             t: t + self.params.eligibility_trace_delay,
             stdp_value,
-            syn_coord,
+            syn_coord: syn_coord.clone(),
         });
     }
 
@@ -216,7 +216,7 @@ mod tests {
 
         let mut sut = PlasticityModulator::new(params);
 
-        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
+        sut.process_stdp_value(0, &SYN_COORD_0, 1.0);
 
         assert!(sut.tick(0).is_none());
         assert!(tick_unwrap(&mut sut, 1).is_empty());
@@ -232,7 +232,7 @@ mod tests {
 
         let mut sut = PlasticityModulator::new(params);
 
-        sut.process_stdp_value(0, SYN_COORD_0, 1.2);
+        sut.process_stdp_value(0, &SYN_COORD_0, 1.2);
 
         assert!(sut.tick(0).is_none());
 
@@ -259,11 +259,11 @@ mod tests {
 
         sut.tick(0);
 
-        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
+        sut.process_stdp_value(0, &SYN_COORD_0, 1.0);
 
         assert!(sut.tick(1).is_none());
         sut.process_dopamine(1.0);
-        sut.process_stdp_value(1, SYN_COORD_1, 1.0);
+        sut.process_stdp_value(1, &SYN_COORD_1, 1.0);
 
         // both eligility traces are before cutoff time -> two events
         let tick_2_events = tick_unwrap(&mut sut, 2);
@@ -315,7 +315,7 @@ mod tests {
         sut.tick(0);
 
         sut.process_dopamine(1.0);
-        sut.process_stdp_value(0, SYN_COORD_0, 1.1);
+        sut.process_stdp_value(0, &SYN_COORD_0, 1.1);
         sut.tick(1);
         sut.process_dopamine(1.0);
 
@@ -359,12 +359,12 @@ mod tests {
         sut.tick(0);
         sut.process_dopamine(1.0);
         sut.tick(1);
-        sut.process_stdp_value(1, SYN_COORD_0, 1.0);
+        sut.process_stdp_value(1, &SYN_COORD_0, 1.0);
 
         sut.process_dopamine(1.0);
         assert!(tick_unwrap(&mut sut, 2).is_empty());
 
-        sut.process_stdp_value(2, SYN_COORD_1, 1.0);
+        sut.process_stdp_value(2, &SYN_COORD_1, 1.0);
 
         sut.process_dopamine(1.0);
 
@@ -398,7 +398,7 @@ mod tests {
         let mut sut = PlasticityModulator::new(params);
 
         sut.tick(0);
-        sut.process_stdp_value(0, SYN_COORD_0, -2.0);
+        sut.process_stdp_value(0, &SYN_COORD_0, -2.0);
         sut.process_dopamine(1.0);
 
         let events = tick_unwrap(&mut sut, 1);
@@ -418,7 +418,7 @@ mod tests {
         let mut sut = PlasticityModulator::new(params);
 
         sut.tick(0);
-        sut.process_stdp_value(0, SYN_COORD_0, 2.0);
+        sut.process_stdp_value(0, &SYN_COORD_0, 2.0);
         sut.process_dopamine(-1.0);
 
         let events = tick_unwrap(&mut sut, 1);
@@ -434,14 +434,14 @@ mod tests {
         params.dopamine_modulation_factor = 1.0;
         let mut sut = PlasticityModulator::new(params);
         sut.tick(0);
-        sut.process_stdp_value(0, SYN_COORD_0, 1.0);
+        sut.process_stdp_value(0, &SYN_COORD_0, 1.0);
         sut.process_dopamine(1.0);
 
         for t in 1..12 {
             sut.tick(t);
         }
 
-        sut.process_stdp_value(11, SYN_COORD_0, 1.0);
+        sut.process_stdp_value(11, &SYN_COORD_0, 1.0);
         sut.process_dopamine(1.0);
 
         sut.reset_ephemeral_state();
@@ -474,7 +474,7 @@ mod tests {
         }
 
         sut.tick(601);
-        sut.process_stdp_value(601, SYN_COORD_0, -0.2);
+        sut.process_stdp_value(601, &SYN_COORD_0, -0.2);
 
         for t in 601..650 {
             assert!(sut.tick(t).is_none());
@@ -511,7 +511,7 @@ mod tests {
             assert!(sut.tick(t).is_none());
         }
 
-        sut.process_stdp_value(1900, SYN_COORD_1, 0.4);
+        sut.process_stdp_value(1900, &SYN_COORD_1, 0.4);
 
         for t in 1901..1950 {
             assert!(sut.tick(t).is_none());

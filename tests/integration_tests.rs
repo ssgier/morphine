@@ -1368,7 +1368,7 @@ fn sc_hashes_single() {
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Single);
+    instance.set_sc_mode(SCMode::Single { threshold: 0.0 });
 
     tick(&mut instance, &[1, 3]);
 
@@ -1412,7 +1412,7 @@ fn sc_hashes_multi() {
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Multi);
+    instance.set_sc_mode(SCMode::Multi { threshold: 0.0 });
 
     tick(&mut instance, &[1, 3]);
 
@@ -1436,4 +1436,127 @@ fn sc_hashes_multi() {
 
     assert_eq!(sc_hashes, expected_sc_hashes);
     assert!(instance.flush_sc_hashes().is_empty());
+}
+
+#[test]
+fn no_sc_hashes_inhibitory() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 1;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    connection
+        .projection_params
+        .synapse_params
+        .weight_scale_factor = -1.0;
+
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    instance.set_sc_mode(SCMode::Multi { threshold: 0.0 });
+
+    tick(&mut instance, &[0]);
+    let mut tick_input = TickInput::default();
+    tick_input.force_spiking_nids.push(1);
+    instance.tick(&tick_input).unwrap();
+
+    let sc_hashes = instance.flush_sc_hashes();
+    let expected_sc_hashes =
+        HashSet::from([compute_sc_hash_multi(&[], 0), compute_sc_hash_multi(&[], 1)]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
+
+    instance.set_sc_mode(SCMode::Single { threshold: 0.0 });
+
+    tick(&mut instance, &[0]);
+    let mut tick_input = TickInput::default();
+    tick_input.force_spiking_nids.push(1);
+    instance.tick(&tick_input).unwrap();
+
+    let sc_hashes = instance.flush_sc_hashes();
+
+    assert!(sc_hashes.is_empty());
+}
+
+#[test]
+fn sc_hashes_threshold_single() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 1;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    connection.projection_params.synapse_params.max_weight = 1.1;
+    connection.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    instance.set_sc_mode(SCMode::Single { threshold: 1.0 });
+
+    tick(&mut instance, &[0]);
+    instance.tick_no_input();
+
+    let sc_hashes = instance.flush_sc_hashes();
+
+    assert!(sc_hashes.is_empty());
+
+    instance.reset_ephemeral_state();
+
+    tick(&mut instance, &[0]);
+    instance.tick_no_input();
+
+    let sc_hashes = instance.flush_sc_hashes();
+    let expected_sc_hashes = HashSet::from([compute_sc_hash_single(0, 1)]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
+}
+
+#[test]
+fn sc_hashes_threshold_multi() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 1;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    connection.projection_params.synapse_params.max_weight = 1.1;
+    connection.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    instance.set_sc_mode(SCMode::Multi { threshold: 1.0 });
+
+    tick(&mut instance, &[0]);
+    instance.tick_no_input();
+
+    let sc_hashes = instance.flush_sc_hashes();
+    let expected_sc_hashes =
+        HashSet::from([compute_sc_hash_multi(&[], 0), compute_sc_hash_multi(&[], 1)]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
+
+    instance.reset_ephemeral_state();
+
+    tick(&mut instance, &[0]);
+    instance.tick_no_input();
+
+    let sc_hashes = instance.flush_sc_hashes();
+    let expected_sc_hashes = HashSet::from([
+        compute_sc_hash_multi(&[], 0),
+        compute_sc_hash_multi(&[0], 1),
+    ]);
+
+    assert_eq!(sc_hashes, expected_sc_hashes);
 }

@@ -85,6 +85,18 @@ struct TransmissionEvent {
     psp: f32,
 }
 
+struct ProcessSpikeCoincidenceResult {
+    syn_weight: f32,
+    max_weight: f32,
+    weight_scale_factor: f32,
+}
+
+impl ProcessSpikeCoincidenceResult {
+    fn is_sc_contrib(&self, threshold: f32) -> bool {
+        self.weight_scale_factor > 0.0 && self.syn_weight / self.max_weight >= threshold
+    }
+}
+
 pub fn create_partitions(
     num_threads: usize,
     thread_id: usize,
@@ -499,6 +511,62 @@ impl Partition {
         }
     }
 
+    fn process_sc_eligible_spike_coincidences(
+        ctx: &TickContext,
+        spike_coincidences: impl Iterator<Item = SpikeCoincidence>,
+        post_syn_nid: usize,
+        nid_to_projections: &mut HashMap<usize, Vec<Projection>>,
+        plasticity_modulator: &mut Option<PlasticityModulator>,
+        sc_mode: SCMode,
+        sc_hash_buffer: &mut HashSet<u64>,
+    ) {
+        match sc_mode {
+            SCMode::Off => {
+                for spike_coincidence in spike_coincidences {
+                    Self::process_spike_coincidence(
+                        nid_to_projections,
+                        plasticity_modulator,
+                        ctx.t,
+                        &spike_coincidence,
+                    );
+                }
+            }
+            SCMode::Single { threshold } => {
+                for spike_coincidence in spike_coincidences {
+                    let processed = Self::process_spike_coincidence(
+                        nid_to_projections,
+                        plasticity_modulator,
+                        ctx.t,
+                        &spike_coincidence,
+                    );
+
+                    if processed.is_sc_contrib(threshold) {
+                        let mut hasher = DefaultHasher::new();
+                        hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
+                        hasher.write_usize(post_syn_nid);
+                        sc_hash_buffer.insert(hasher.finish());
+                    }
+                }
+            }
+            SCMode::Multi { threshold } => {
+                let mut hasher = DefaultHasher::new();
+                for spike_coincidence in spike_coincidences {
+                    let processed = Self::process_spike_coincidence(
+                        nid_to_projections,
+                        plasticity_modulator,
+                        ctx.t,
+                        &spike_coincidence,
+                    );
+                    if processed.is_sc_contrib(threshold) {
+                        hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
+                    }
+                }
+                hasher.write_usize(post_syn_nid);
+                sc_hash_buffer.insert(hasher.finish());
+            }
+        }
+    }
+
     fn check_for_spikes(&mut self, ctx: &TickContext) -> Vec<usize> {
         let mut spiking_nids = Vec::new();
 
@@ -507,50 +575,18 @@ impl Partition {
                 let neuron_idx = spike_trigger_nid - self.nid_start;
 
                 if neuron_idx < self.neurons.len() {
-                    let spike = self.neurons[neuron_idx].spike(ctx.t, &self.neuron_params);
+                    let spike_coincidences =
+                        self.neurons[neuron_idx].spike(ctx.t, &self.neuron_params).0;
 
-                    match self.sc_mode {
-                        SCMode::Off => {
-                            for spike_coincidence in spike.0 {
-                                Self::process_spike_coincidence(
-                                    &mut self.nid_to_projections,
-                                    &mut self.plasticity_modulator,
-                                    ctx.t,
-                                    spike_coincidence,
-                                );
-                            }
-                        }
-                        SCMode::Single => {
-                            let post_syn_nid = self.nid_start + neuron_idx;
-                            for spike_coincidence in spike.0 {
-                                let mut hasher = DefaultHasher::new();
-                                hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
-                                Self::process_spike_coincidence(
-                                    &mut self.nid_to_projections,
-                                    &mut self.plasticity_modulator,
-                                    ctx.t,
-                                    spike_coincidence,
-                                );
-                                hasher.write_usize(post_syn_nid);
-                                self.sc_hash_buffer.insert(hasher.finish());
-                            }
-                        }
-                        SCMode::Multi => {
-                            let post_syn_nid = self.nid_start + neuron_idx;
-                            let mut hasher = DefaultHasher::new();
-                            for spike_coincidence in spike.0 {
-                                hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
-                                Self::process_spike_coincidence(
-                                    &mut self.nid_to_projections,
-                                    &mut self.plasticity_modulator,
-                                    ctx.t,
-                                    spike_coincidence,
-                                );
-                            }
-                            hasher.write_usize(post_syn_nid);
-                            self.sc_hash_buffer.insert(hasher.finish());
-                        }
-                    }
+                    Self::process_sc_eligible_spike_coincidences(
+                        ctx,
+                        spike_coincidences,
+                        *spike_trigger_nid,
+                        &mut self.nid_to_projections,
+                        &mut self.plasticity_modulator,
+                        self.sc_mode,
+                        &mut self.sc_hash_buffer,
+                    );
 
                     spiking_nids.push(*spike_trigger_nid);
                 }
@@ -560,48 +596,16 @@ impl Partition {
         for neuron_idx in self.neuron_indexes_to_check.drain(..) {
             if let Some(spike) = self.neurons[neuron_idx].check_spike(ctx.t, &self.neuron_params) {
                 let post_syn_nid = self.nid_start + neuron_idx;
-                match self.sc_mode {
-                    SCMode::Off => {
-                        for spike_coincidence in spike.0 {
-                            Self::process_spike_coincidence(
-                                &mut self.nid_to_projections,
-                                &mut self.plasticity_modulator,
-                                ctx.t,
-                                spike_coincidence,
-                            );
-                        }
-                    }
-                    SCMode::Single => {
-                        for spike_coincidence in spike.0 {
-                            let mut hasher = DefaultHasher::new();
-                            hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
-                            hasher.write_usize(post_syn_nid);
-                            let sc_hash = hasher.finish();
-                            self.sc_hash_buffer.insert(sc_hash);
-                            Self::process_spike_coincidence(
-                                &mut self.nid_to_projections,
-                                &mut self.plasticity_modulator,
-                                ctx.t,
-                                spike_coincidence,
-                            );
-                        }
-                    }
-                    SCMode::Multi => {
-                        let mut hasher = DefaultHasher::new();
-                        for spike_coincidence in spike.0 {
-                            hasher.write_usize(spike_coincidence.syn_coord.pre_syn_nid);
-                            Self::process_spike_coincidence(
-                                &mut self.nid_to_projections,
-                                &mut self.plasticity_modulator,
-                                ctx.t,
-                                spike_coincidence,
-                            );
-                        }
-                        hasher.write_usize(post_syn_nid);
-                        let sc_hash = hasher.finish();
-                        self.sc_hash_buffer.insert(sc_hash);
-                    }
-                };
+
+                Self::process_sc_eligible_spike_coincidences(
+                    ctx,
+                    spike.0,
+                    post_syn_nid,
+                    &mut self.nid_to_projections,
+                    &mut self.plasticity_modulator,
+                    self.sc_mode,
+                    &mut self.sc_hash_buffer,
+                );
 
                 spiking_nids.push(post_syn_nid);
             }
@@ -614,13 +618,16 @@ impl Partition {
         nid_to_projections: &mut HashMap<usize, Vec<Projection>>,
         plasticity_modulator: &mut Option<PlasticityModulator>,
         t: usize,
-        spike_coincidence: SpikeCoincidence,
-    ) {
+        spike_coincidence: &SpikeCoincidence,
+    ) -> ProcessSpikeCoincidenceResult {
         let projections = nid_to_projections
             .get_mut(&spike_coincidence.syn_coord.pre_syn_nid)
             .unwrap();
 
         let projection = &mut projections[spike_coincidence.syn_coord.projection_idx];
+
+        let synapse = &mut projection.synapses[spike_coincidence.syn_coord.synapse_idx];
+        let syn_weight_before = synapse.weight;
 
         if let Some(short_term_stdp_params) = &projection.prj_params.short_term_stdp_params {
             let stdp_value = util::compute_stdp(
@@ -628,11 +635,7 @@ impl Partition {
                 &short_term_stdp_params.stdp_params,
             );
 
-            projection.synapses[spike_coincidence.syn_coord.synapse_idx].process_short_term_stdp(
-                t,
-                stdp_value,
-                short_term_stdp_params.tau,
-            );
+            synapse.process_short_term_stdp(t, stdp_value, short_term_stdp_params.tau);
         }
 
         if let Some(long_term_stdp_params) = &projection.prj_params.long_term_stdp_params {
@@ -640,11 +643,20 @@ impl Partition {
                 util::compute_stdp(spike_coincidence.t_pre_minus_post, long_term_stdp_params);
 
             if let Some(plasticity_modulator) = plasticity_modulator {
-                plasticity_modulator.process_stdp_value(t, spike_coincidence.syn_coord, stdp_value);
+                plasticity_modulator.process_stdp_value(
+                    t,
+                    &spike_coincidence.syn_coord,
+                    stdp_value,
+                );
             } else {
-                projection.synapses[spike_coincidence.syn_coord.synapse_idx]
-                    .process_weight_change(stdp_value, &projection.prj_params.synapse_params)
+                synapse.process_weight_change(stdp_value, &projection.prj_params.synapse_params)
             }
+        }
+
+        ProcessSpikeCoincidenceResult {
+            syn_weight: syn_weight_before,
+            max_weight: projection.prj_params.synapse_params.max_weight,
+            weight_scale_factor: projection.prj_params.synapse_params.weight_scale_factor,
         }
     }
 
@@ -691,7 +703,7 @@ impl Partition {
                         &mut self.nid_to_projections,
                         &mut self.plasticity_modulator,
                         t,
-                        spike_coincidence,
+                        &spike_coincidence,
                     );
                 }
             }

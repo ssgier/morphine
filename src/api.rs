@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, Copy)]
 pub enum SCMode {
     Off,
-    Single,
-    Multi,
+    Single { threshold: f32 },
+    Multi { threshold: f32 },
 }
