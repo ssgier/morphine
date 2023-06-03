@@ -1368,7 +1368,9 @@ fn sc_hashes_single() {
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Single { threshold: 0.0 });
+    instance
+        .set_sc_mode(SCMode::Single { threshold: 0.0 })
+        .unwrap();
 
     tick(&mut instance, &[1, 3]);
 
@@ -1412,7 +1414,9 @@ fn sc_hashes_multi() {
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Multi { threshold: 0.0 });
+    instance
+        .set_sc_mode(SCMode::Multi { threshold: 0.0 })
+        .unwrap();
 
     tick(&mut instance, &[1, 3]);
 
@@ -1457,7 +1461,9 @@ fn no_sc_hashes_inhibitory() {
     params.layer_connections.push(connection);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Multi { threshold: 0.0 });
+    instance
+        .set_sc_mode(SCMode::Multi { threshold: 0.0 })
+        .unwrap();
 
     tick(&mut instance, &[0]);
     let mut tick_input = TickInput::default();
@@ -1470,7 +1476,9 @@ fn no_sc_hashes_inhibitory() {
 
     assert_eq!(sc_hashes, expected_sc_hashes);
 
-    instance.set_sc_mode(SCMode::Single { threshold: 0.0 });
+    instance
+        .set_sc_mode(SCMode::Single { threshold: 0.0 })
+        .unwrap();
 
     tick(&mut instance, &[0]);
     let mut tick_input = TickInput::default();
@@ -1499,7 +1507,9 @@ fn sc_hashes_threshold_single() {
     params.layer_connections.push(connection);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Single { threshold: 1.0 });
+    instance
+        .set_sc_mode(SCMode::Single { threshold: 1.0 })
+        .unwrap();
 
     tick(&mut instance, &[0]);
     instance.tick_no_input();
@@ -1536,7 +1546,9 @@ fn sc_hashes_threshold_multi() {
     params.layer_connections.push(connection);
 
     let mut instance = create_instance(params).unwrap();
-    instance.set_sc_mode(SCMode::Multi { threshold: 1.0 });
+    instance
+        .set_sc_mode(SCMode::Multi { threshold: 1.0 })
+        .unwrap();
 
     tick(&mut instance, &[0]);
     instance.tick_no_input();
@@ -1559,4 +1571,428 @@ fn sc_hashes_threshold_multi() {
     ]);
 
     assert_eq!(sc_hashes, expected_sc_hashes);
+}
+
+#[test]
+fn sc_hashes_ephemeral_state_reset() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+
+    layer.num_neurons = 4;
+    params.layers.push(layer);
+
+    let mut instance = create_instance(params).unwrap();
+    instance
+        .set_sc_mode(SCMode::Multi { threshold: 0.0 })
+        .unwrap();
+
+    tick(&mut instance, &[1, 3]);
+
+    instance.reset_ephemeral_state();
+
+    assert!(instance.flush_sc_hashes().is_empty());
+}
+
+#[test]
+fn para_spikes_potentiation_no_depression() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_01.projection_params.synapse_params.max_weight = 0.5;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut connection_12 = LayerConnectionParams::defaults_for_layer_ids(1, 2);
+    connection_12.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_12.projection_params.synapse_params.max_weight = 1.0;
+    connection_12.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_12.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_12);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.tick_no_input_until_exclusive(4);
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.push(7);
+    instance.tick(&tick_input).unwrap();
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    assert_approx_eq!(f32, weights[0], 0.1); // 0 -> 3
+    assert_approx_eq!(f32, weights[1], 0.2); // 0 -> 4
+    assert_approx_eq!(f32, weights[2], 0.1); // 0 -> 5
+
+    assert_approx_eq!(f32, weights[3], 0.1); // 1 -> 3
+    assert_approx_eq!(f32, weights[4], 0.1); // 1 -> 4
+    assert_approx_eq!(f32, weights[5], 0.1); // 1 -> 5
+
+    assert_approx_eq!(f32, weights[6], 0.1); // 2 -> 3
+    assert_approx_eq!(f32, weights[7], 0.2); // 2 -> 4
+    assert_approx_eq!(f32, weights[8], 0.1); // 2 -> 5
+
+    assert_approx_eq!(f32, weights[9], 0.1); // 3 -> 6
+    assert_approx_eq!(f32, weights[10], 0.1); // 3 -> 7
+    assert_approx_eq!(f32, weights[11], 0.1); // 3 -> 8
+
+    assert_approx_eq!(f32, weights[12], 0.1); // 4 -> 6
+    assert_approx_eq!(f32, weights[13], 0.1); // 4 -> 7
+    assert_approx_eq!(f32, weights[14], 0.1); // 4 -> 8
+
+    assert_approx_eq!(f32, weights[15], 0.1); // 5 -> 6
+    assert_approx_eq!(f32, weights[16], 0.1); // 5 -> 7
+    assert_approx_eq!(f32, weights[17], 0.1); // 5 -> 8
+}
+
+#[test]
+fn para_spikes_potentiation_and_depression() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_01.projection_params.synapse_params.max_weight = 0.4;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut connection_12 = LayerConnectionParams::defaults_for_layer_ids(1, 2);
+    connection_12.initial_syn_weight = InitialSynWeight::Constant(0.2);
+    connection_12.projection_params.synapse_params.max_weight = 0.4;
+    connection_12.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_12.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_12);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.tick_no_input_until_exclusive(4);
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.push(4);
+    tick_input.force_spiking_nids.push(7);
+    instance.tick(&tick_input).unwrap();
+
+    instance.tick_no_input_for(3);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    let expected_potentiated_weight = 0.1 + 0.1 * (-1.0 / 20.0f32).exp();
+    let expected_depressed_weight = 0.2 - 0.11 * (-1.0 / 25.0f32).exp();
+
+    assert_approx_eq!(f32, weights[0], 0.1); // 0 -> 3
+    assert_approx_eq!(f32, weights[1], expected_potentiated_weight); // 0 -> 4
+    assert_approx_eq!(f32, weights[2], 0.1); // 0 -> 5
+
+    assert_approx_eq!(f32, weights[3], 0.1); // 1 -> 3
+    assert_approx_eq!(f32, weights[4], 0.1); // 1 -> 4
+    assert_approx_eq!(f32, weights[5], 0.1); // 1 -> 5
+
+    assert_approx_eq!(f32, weights[6], 0.1); // 2 -> 3
+    assert_approx_eq!(f32, weights[7], expected_potentiated_weight); // 2 -> 4
+    assert_approx_eq!(f32, weights[8], 0.1); // 2 -> 5
+
+    assert_approx_eq!(f32, weights[9], 0.2); // 3 -> 6
+    assert_approx_eq!(f32, weights[10], 0.2); // 3 -> 7
+    assert_approx_eq!(f32, weights[11], 0.2); // 3 -> 8
+
+    assert_approx_eq!(f32, weights[12], 0.2); // 4 -> 6
+    assert_approx_eq!(f32, weights[13], expected_depressed_weight); // 4 -> 7
+    assert_approx_eq!(f32, weights[14], 0.2); // 4 -> 8
+
+    assert_approx_eq!(f32, weights[15], 0.2); // 5 -> 6
+    assert_approx_eq!(f32, weights[16], 0.2); // 5 -> 7
+    assert_approx_eq!(f32, weights[17], 0.2); // 5 -> 8
+}
+
+#[test]
+fn para_spike_and_normal_spike_simultaneous() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    connection_01.projection_params.synapse_params.max_weight = 0.8;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.tick_no_input();
+    let tick_result = instance.tick_no_input();
+    assert_equal(tick_result.spiking_nids, [4]);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    assert_approx_eq!(f32, weights[0], 0.5); // 0 -> 3
+    assert_approx_eq!(f32, weights[1], 0.6); // 0 -> 4
+    assert_approx_eq!(f32, weights[2], 0.5); // 0 -> 5
+
+    assert_approx_eq!(f32, weights[3], 0.5); // 1 -> 3
+    assert_approx_eq!(f32, weights[4], 0.5); // 1 -> 4
+    assert_approx_eq!(f32, weights[5], 0.5); // 1 -> 5
+
+    assert_approx_eq!(f32, weights[6], 0.5); // 2 -> 3
+    assert_approx_eq!(f32, weights[7], 0.6); // 2 -> 4
+    assert_approx_eq!(f32, weights[8], 0.5); // 2 -> 5
+}
+
+#[test]
+fn para_spike_then_normal_spike() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.4);
+    connection_01.projection_params.synapse_params.max_weight = 0.8;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+    instance.tick_no_input();
+    tick(&mut instance, &[1]);
+
+    let tick_result = instance.tick_no_input();
+    assert_equal(tick_result.spiking_nids, [4]);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    assert_approx_eq!(f32, weights[1], 0.5); // 0 -> 4
+    assert_approx_eq!(f32, weights[4], 0.4); // 1 -> 4
+    assert_approx_eq!(f32, weights[7], 0.5); // 2 -> 4
+}
+
+#[test]
+fn para_spike_then_force_spike() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_01.projection_params.synapse_params.max_weight = 0.5;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.tick_no_input_for(2);
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.push(4);
+    instance.tick(&tick_input).unwrap();
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    assert_approx_eq!(f32, weights[0], 0.1); // 0 -> 3
+    assert_approx_eq!(f32, weights[1], 0.2); // 0 -> 4
+    assert_approx_eq!(f32, weights[2], 0.1); // 0 -> 5
+
+    assert_approx_eq!(f32, weights[3], 0.1); // 1 -> 3
+    assert_approx_eq!(f32, weights[4], 0.1); // 1 -> 4
+    assert_approx_eq!(f32, weights[5], 0.1); // 1 -> 5
+
+    assert_approx_eq!(f32, weights[6], 0.1); // 2 -> 3
+    assert_approx_eq!(f32, weights[7], 0.2); // 2 -> 4
+    assert_approx_eq!(f32, weights[8], 0.1); // 2 -> 5
+}
+
+#[test]
+fn force_spike_then_para_spike() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_01.projection_params.synapse_params.max_weight = 0.5;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    let mut tick_input = TickInput::new();
+    tick_input.force_spiking_nids.push(4);
+    instance.tick(&tick_input).unwrap();
+
+    instance.tick_no_input_for(7);
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.tick_no_input_for(2);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    let expected_depression = 0.11 * (-10.0 / 25.0f32).exp();
+    let expected_potentiation = 0.1;
+    let expected_changed_weight = 0.1 - expected_depression + expected_potentiation;
+
+    assert_approx_eq!(f32, weights[0], 0.1); // 0 -> 3
+    assert_approx_eq!(f32, weights[1], expected_changed_weight); // 0 -> 4
+    assert_approx_eq!(f32, weights[2], 0.1); // 0 -> 5
+
+    assert_approx_eq!(f32, weights[3], 0.1); // 1 -> 3
+    assert_approx_eq!(f32, weights[4], 0.1); // 1 -> 4
+    assert_approx_eq!(f32, weights[5], 0.1); // 1 -> 5
+
+    assert_approx_eq!(f32, weights[6], 0.1); // 2 -> 3
+    assert_approx_eq!(f32, weights[7], expected_changed_weight); // 2 -> 4
+    assert_approx_eq!(f32, weights[8], 0.1); // 2 -> 5
+}
+
+#[test]
+fn repeated_para_spikes_lead_to_normal_spikes() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.0);
+    connection_01.projection_params.synapse_params.max_weight = 0.501;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    for _ in 0..5 {
+        tick(&mut instance, &[0, 2]);
+        instance.tick_no_input();
+        let tick_result = instance.tick_no_input();
+        assert!(tick_result.spiking_nids.is_empty());
+        instance.tick_no_input_for(10);
+    }
+
+    tick(&mut instance, &[0, 2]);
+    instance.tick_no_input();
+    let tick_result = instance.tick_no_input();
+    assert_equal(&tick_result.spiking_nids, &[4]);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    assert_approx_eq!(f32, weights[1], 0.501); // 0 -> 4
+    assert_approx_eq!(f32, weights[4], 0.0); // 1 -> 4
+    assert_approx_eq!(f32, weights[7], 0.501); // 2 -> 4
+}
+
+#[test]
+fn para_spikes_ephemeral_state_reset() {
+    let mut params = InstanceParams::default();
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 3;
+    layer.use_para_spikes = true;
+
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    connection_01.projection_params.synapse_params.max_weight = 0.5;
+    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.layer_connections.push(connection_01);
+
+    let mut instance = create_instance(params).unwrap();
+
+    tick(&mut instance, &[0, 2]);
+
+    instance.reset_ephemeral_state();
+
+    instance.tick_no_input_until_exclusive(4);
+
+    let weights = instance
+        .extract_state_snapshot()
+        .synapse_states
+        .iter()
+        .map(|syn_state| syn_state.weight)
+        .collect_vec();
+
+    for weight in weights {
+        assert_approx_eq!(f32, weight, 0.1);
+    }
 }

@@ -59,6 +59,10 @@ impl SpikeCoincidenceDetector {
     }
 
     pub fn reset_ephemeral_state(&mut self) {
+        self.clear_spike_coincidences();
+    }
+
+    pub fn clear_spike_coincidences(&mut self) {
         self.recent_pre_syn_spikes.clear();
     }
 

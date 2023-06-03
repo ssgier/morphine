@@ -62,6 +62,7 @@ pub struct Partition {
     nid_to_projections: HashMap<usize, Vec<Projection>>,
     neuron_params: NeuronParams,
     neurons: Vec<Neuron>,
+    para_neurons: Option<Vec<Neuron>>,
     neuron_indexes_to_check: Vec<usize>,
     transmission_buffer: BatchedRingBuffer<TransmissionEvent>,
     plasticity_modulator: Option<PlasticityModulator>,
@@ -83,6 +84,7 @@ struct TransmissionEvent {
     neuron_idx: usize,
     syn_coord: SynapseCoordinate,
     psp: f32,
+    para_psp: f32,
 }
 
 struct ProcessSpikeCoincidenceResult {
@@ -136,6 +138,16 @@ pub fn create_partitions(
         for _ in 0..partition_range.len() {
             neurons.push(Neuron::new());
         }
+
+        let para_neurons = if layer_params.use_para_spikes {
+            let mut para_neurons = Vec::new();
+            for _ in 0..partition_range.len() {
+                para_neurons.push(Neuron::new());
+            }
+            Some(para_neurons)
+        } else {
+            None
+        };
 
         let plasticity_modulator = layer_params
             .plasticity_modulation_params
@@ -266,6 +278,7 @@ pub fn create_partitions(
             nid_to_projections,
             neuron_params: layer_params.neuron_params.clone(),
             neurons,
+            para_neurons,
             neuron_indexes_to_check: Vec::new(),
             transmission_buffer,
             plasticity_modulator,
@@ -395,6 +408,12 @@ impl Partition {
             neuron.reset_ephemeral_state(t);
         }
 
+        if let Some(para_neurons) = &mut self.para_neurons {
+            for para_neuron in para_neurons {
+                para_neuron.reset_ephemeral_state(t);
+            }
+        }
+
         for projection in self
             .nid_to_projections
             .values_mut()
@@ -414,6 +433,7 @@ impl Partition {
         }
 
         self.transmission_buffer.clear();
+        self.sc_hash_buffer.clear();
     }
 
     fn extract_state_snapshot(&self, t: usize) -> PartitionStateSnapshot {
@@ -570,11 +590,16 @@ impl Partition {
     fn check_for_spikes(&mut self, ctx: &TickContext) -> Vec<usize> {
         let mut spiking_nids = Vec::new();
 
+        // externally triggered spikes
         for spike_trigger_nid in &ctx.spike_trigger_nids {
             if *spike_trigger_nid >= self.nid_start {
                 let neuron_idx = spike_trigger_nid - self.nid_start;
 
                 if neuron_idx < self.neurons.len() {
+                    if let Some(para_neurons) = &mut self.para_neurons {
+                        para_neurons[neuron_idx].spike(ctx.t, &self.neuron_params);
+                    }
+
                     let spike_coincidences =
                         self.neurons[neuron_idx].spike(ctx.t, &self.neuron_params).0;
 
@@ -593,21 +618,57 @@ impl Partition {
             }
         }
 
+        // internally triggered spikes
         for neuron_idx in self.neuron_indexes_to_check.drain(..) {
-            if let Some(spike) = self.neurons[neuron_idx].check_spike(ctx.t, &self.neuron_params) {
-                let post_syn_nid = self.nid_start + neuron_idx;
+            let mut clear_spike_coincidences = false;
+            {
+                let spike = self.neurons[neuron_idx].check_spike(ctx.t, &self.neuron_params);
 
-                Self::process_sc_eligible_spike_coincidences(
-                    ctx,
-                    spike.0,
-                    post_syn_nid,
-                    &mut self.nid_to_projections,
-                    &mut self.plasticity_modulator,
-                    self.sc_mode,
-                    &mut self.sc_hash_buffer,
-                );
+                if let Some(para_neurons) = &mut self.para_neurons {
+                    // para spikes enabled
+                    let post_syn_nid = self.nid_start + neuron_idx;
+                    let para_spike =
+                        para_neurons[neuron_idx].check_spike(ctx.t, &self.neuron_params);
 
-                spiking_nids.push(post_syn_nid);
+                    if let Some(para_spike) = para_spike {
+                        Self::process_sc_eligible_spike_coincidences(
+                            ctx,
+                            para_spike.0,
+                            post_syn_nid,
+                            &mut self.nid_to_projections,
+                            &mut self.plasticity_modulator,
+                            self.sc_mode,
+                            &mut self.sc_hash_buffer,
+                        );
+
+                        clear_spike_coincidences = true;
+                    }
+
+                    if spike.is_some() {
+                        clear_spike_coincidences = true;
+                        spiking_nids.push(post_syn_nid);
+                    }
+                } else if let Some(spike) = spike {
+                    // para spikes disabled
+                    let post_syn_nid = self.nid_start + neuron_idx;
+
+                    Self::process_sc_eligible_spike_coincidences(
+                        ctx,
+                        spike.0,
+                        post_syn_nid,
+                        &mut self.nid_to_projections,
+                        &mut self.plasticity_modulator,
+                        self.sc_mode,
+                        &mut self.sc_hash_buffer,
+                    );
+
+                    spiking_nids.push(post_syn_nid);
+                }
+            }
+
+            if clear_spike_coincidences {
+                self.neurons[neuron_idx].clear_spike_coincidences();
+                self.para_neurons.as_deref_mut().unwrap()[neuron_idx].clear_spike_coincidences();
             }
         }
 
@@ -671,7 +732,20 @@ impl Partition {
                 &self.neuron_params,
             );
 
-            if psp_result.might_spike {
+            let para_might_spike = if let Some(para_neurons) = &mut self.para_neurons {
+                let para_psp_result = para_neurons[transm_event.neuron_idx].apply_psp(
+                    t,
+                    transm_event.para_psp,
+                    &transm_event.syn_coord,
+                    &self.neuron_params,
+                );
+
+                para_psp_result.might_spike
+            } else {
+                false
+            };
+
+            if psp_result.might_spike || para_might_spike {
                 self.neuron_indexes_to_check.push(transm_event.neuron_idx);
             }
 
@@ -726,7 +800,7 @@ impl Partition {
                     .unwrap_or(1.0); // if none, default won't have any effect
 
                 for (synapse_idx, synapse) in projection.synapses.iter_mut().enumerate() {
-                    let psp = synapse.process_pre_syn_spike_get_psp(
+                    let psp_result = synapse.process_pre_syn_spike_get_psp(
                         spike_t,
                         stp_value,
                         &projection.prj_params.synapse_params,
@@ -742,7 +816,8 @@ impl Partition {
                     let transmission_event = TransmissionEvent {
                         syn_coord,
                         neuron_idx: synapse.neuron_idx,
-                        psp,
+                        psp: psp_result.psp,
+                        para_psp: psp_result.para_psp,
                     };
 
                     self.transmission_buffer
@@ -872,6 +947,7 @@ mod tests {
             num_neurons: 100,
             neuron_params: NeuronParams::default(),
             plasticity_modulation_params: None,
+            use_para_spikes: false,
         };
 
         let conn_params = LayerConnectionParams {
@@ -929,18 +1005,21 @@ mod tests {
             num_neurons: 5,
             neuron_params: NeuronParams::default(),
             plasticity_modulation_params: None,
+            use_para_spikes: false,
         };
 
         let layer_1 = LayerParams {
             num_neurons: 100,
             neuron_params: NeuronParams::default(),
             plasticity_modulation_params: None,
+            use_para_spikes: false,
         };
 
         let layer_2 = LayerParams {
             num_neurons: 10,
             neuron_params: NeuronParams::default(),
             plasticity_modulation_params: None,
+            use_para_spikes: false,
         };
 
         params.layers.push(layer_0);

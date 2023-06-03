@@ -15,6 +15,7 @@ pub struct LayerParams {
     pub num_neurons: usize,
     pub neuron_params: NeuronParams,
     pub plasticity_modulation_params: Option<PlasticityModulationParams>,
+    pub use_para_spikes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,12 +73,21 @@ pub struct SynapseParams {
     pub weight_scale_factor: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum StpParams {
+    #[default]
     NoStp,
-    Depression { tau: f32, p0: f32, factor: f32 },
-    Facilitation { tau: f32, p0: f32, factor: f32 },
+    Depression {
+        tau: f32,
+        p0: f32,
+        factor: f32,
+    },
+    Facilitation {
+        tau: f32,
+        p0: f32,
+        factor: f32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,6 +147,7 @@ impl Default for LayerParams {
             num_neurons: 1,
             neuron_params: NeuronParams::default(),
             plasticity_modulation_params: None,
+            use_para_spikes: false,
         }
     }
 }
@@ -184,12 +195,6 @@ impl Default for PlasticityModulationParams {
             dopamine_conflation_period: 200,
             dopamine_modulation_factor: 1.0,
         }
-    }
-}
-
-impl Default for StpParams {
-    fn default() -> Self {
-        StpParams::NoStp
     }
 }
 

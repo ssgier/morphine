@@ -75,6 +75,8 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
 
     let num_neurons = params.layers.iter().map(|layer| layer.num_neurons).sum();
 
+    let uses_para_spikes = params.layers.iter().any(|layer| layer.use_para_spikes);
+
     Ok(Instance {
         num_in_channels,
         num_neurons,
@@ -92,6 +94,7 @@ pub fn create_instance(params: InstanceParams) -> Result<Instance, SimpleError> 
         num_partitions: num_threads,
         last_tick_period: 0,
         join_handles,
+        uses_para_spikes,
     })
 }
 
@@ -201,6 +204,7 @@ pub struct Instance {
     num_partitions: usize,
     last_tick_period: usize,
     join_handles: Vec<JoinHandle<()>>,
+    uses_para_spikes: bool,
 }
 
 static EMPTY_TICK_INPUT: TickInput = TickInput {
@@ -284,6 +288,13 @@ impl Instance {
         self.tick(&EMPTY_TICK_INPUT).unwrap()
     }
 
+    pub fn tick_no_input_for(&mut self, t: usize) {
+        let t_start = self.get_next_tick_period();
+        let t_stop = t_start + t;
+
+        self.tick_no_input_until_exclusive(t_stop)
+    }
+
     pub fn tick_no_input_until_inclusive(&mut self, t: usize) {
         while self.get_last_tick_period() < t {
             self.tick_no_input();
@@ -336,11 +347,18 @@ impl Instance {
         }
     }
 
-    pub fn set_sc_mode(&mut self, sc_mode: SCMode) {
-        self.broadcast_tx
-            .as_mut()
-            .unwrap()
-            .broadcast(Request::SetSCMode(sc_mode))
+    pub fn set_sc_mode(&mut self, sc_mode: SCMode) -> SimpleResult<()> {
+        if self.uses_para_spikes {
+            Err(SimpleError::new(
+                "SC is not supported when para-spikes enabled",
+            ))
+        } else {
+            self.broadcast_tx
+                .as_mut()
+                .unwrap()
+                .broadcast(Request::SetSCMode(sc_mode));
+            Ok(())
+        }
     }
 
     pub fn flush_sc_hashes(&mut self) -> HashSet<u64> {
@@ -444,6 +462,7 @@ mod tests {
             num_partitions,
             last_tick_period: 0,
             join_handles: Vec::new(),
+            uses_para_spikes: false,
         };
 
         let join_handles: Vec<_> = (0..num_partitions)
@@ -547,6 +566,7 @@ mod tests {
             num_partitions,
             last_tick_period: 0,
             join_handles: Vec::new(),
+            uses_para_spikes: false,
         };
 
         let mut broadcast_rx = instance.broadcast_tx.as_mut().unwrap().add_rx();
@@ -590,16 +610,19 @@ mod tests {
                 num_neurons: 5,
                 neuron_params: NeuronParams::default(),
                 plasticity_modulation_params: None,
+                use_para_spikes: false,
             },
             LayerParams {
                 num_neurons: 3,
                 neuron_params: NeuronParams::default(),
                 plasticity_modulation_params: None,
+                use_para_spikes: false,
             },
             LayerParams {
                 num_neurons: 2,
                 neuron_params: NeuronParams::default(),
                 plasticity_modulation_params: None,
+                use_para_spikes: false,
             },
         ];
 

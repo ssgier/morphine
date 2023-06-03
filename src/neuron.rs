@@ -107,6 +107,10 @@ impl Neuron {
         )
     }
 
+    pub fn clear_spike_coincidences(&mut self) {
+        self.spike_coincidence_detector.clear_spike_coincidences();
+    }
+
     pub fn reset_ephemeral_state(&mut self, t: usize) {
         self.last_t = t;
         self.last_spike_t = None;
