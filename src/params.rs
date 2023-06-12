@@ -6,6 +6,8 @@ use simple_error::SimpleError;
 pub struct InstanceParams {
     pub layers: Vec<LayerParams>,
     pub layer_connections: Vec<LayerConnectionParams>,
+    pub position_dim: usize,
+    pub hyper_sphere: bool,
     pub technical_params: TechnicalParams,
 }
 
@@ -24,7 +26,7 @@ pub struct LayerConnectionParams {
     pub from_layer_id: usize,
     pub to_layer_id: usize,
     pub projection_params: ProjectionParams,
-    pub connect_density: f64,
+    pub smooth_connect_probability: bool,
     pub connect_width: f64,
     pub initial_syn_weight: InitialSynWeight,
     pub conduction_delay_max_random_part: usize,
@@ -39,8 +41,8 @@ impl LayerConnectionParams {
             from_layer_id,
             to_layer_id,
             projection_params: ProjectionParams::default(),
-            connect_density: 1.0,
-            connect_width: 2.0,
+            smooth_connect_probability: false,
+            connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(1.0),
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 0.0,
@@ -211,7 +213,7 @@ impl Default for StdpParams {
 
 pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), SimpleError> {
     for layer_params in &instance_params.layers {
-        validate_layer_params(layer_params)?;
+        validate_layer_params(layer_params, instance_params.position_dim)?;
     }
 
     if !instance_params.layers.is_empty() {
@@ -251,7 +253,25 @@ pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), 
     Ok(())
 }
 
-fn validate_layer_params(layer_params: &LayerParams) -> Result<(), SimpleError> {
+fn validate_grid(position_dim: usize, num_neurons: usize) -> Result<(), SimpleError> {
+    if position_dim < 2 {
+        Ok(())
+    } else {
+        let grid_validity = (num_neurons as f64).powf(1.0 / position_dim as f64).fract() == 0.0;
+
+        if !grid_validity {
+            Err(SimpleError::new(format!(
+                "Cannot build even grid of dimension {} with {} neurons",
+                position_dim, num_neurons
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn validate_layer_params(layer_params: &LayerParams, position_dim: usize) -> Result<(), SimpleError> {
+    validate_grid(position_dim, layer_params.num_neurons)?;
     validate_neuron_params(&layer_params.neuron_params)?;
 
     if let Some(plasticity_modulation_params) = &layer_params.plasticity_modulation_params {
@@ -266,12 +286,8 @@ fn validate_connection_params(
 ) -> Result<(), SimpleError> {
     validate_projection_params(&connection_params.projection_params)?;
 
-    if connection_params.connect_density <= 0.0 || connection_params.connect_density > 1.0 {
-        return Err(SimpleError::new("connect_density must be in (0, 1]"));
-    }
-
-    if connection_params.connect_width < 0.0 || connection_params.connect_width > 2.0 {
-        return Err(SimpleError::new("connect_width must be in [0, 2]"));
+    if connection_params.connect_width < 0.0 {
+        return Err(SimpleError::new("connect_width must not be negative"));
     }
 
     match connection_params.initial_syn_weight {
@@ -476,6 +492,51 @@ mod tests {
     fn valid_params() {
         let params = test_util::get_template_instance_params();
         assert!(validate_instance_params(&params).is_ok());
+    }
+
+    fn test_grid_validation(position_dim: usize, num_neurons: usize, valid: bool) {
+        let mut instance_params = InstanceParams::default();
+        let mut layer_params = LayerParams::default();
+
+        instance_params.position_dim = position_dim;
+        layer_params.num_neurons = num_neurons;
+        instance_params.layers.push(layer_params);
+
+        let result = validate_instance_params(&instance_params);
+
+        if valid {
+            assert!(result.is_ok());
+        } else {
+            assert!(result.is_err());
+
+            assert_eq!(
+                result.unwrap_err().as_str(),
+                format!(
+                    "Cannot build even grid of dimension {} with {} neurons",
+                    position_dim, num_neurons
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn grid_validity() {
+        test_grid_validation(0, 3, true);
+
+        for num_neurons in 0..3 {
+            test_grid_validation(1, num_neurons, true);
+        }
+
+        test_grid_validation(2, 1, true);
+        test_grid_validation(2, 2, false);
+        test_grid_validation(2, 4, true);
+
+        for num_neurons in 2..8 {
+            test_grid_validation(3, num_neurons, false);
+        }
+
+        test_grid_validation(3, 8, true);
+        test_grid_validation(3, 9, false);
     }
 
     #[test]
@@ -694,34 +755,6 @@ mod tests {
     }
 
     #[test]
-    fn zero_connect_density() {
-        let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].connect_density = 0.0;
-        let result = validate_instance_params(&params);
-
-        assert!(result.is_err());
-
-        assert_eq!(
-            result.unwrap_err().as_str(),
-            "connect_density must be in (0, 1]"
-        );
-    }
-
-    #[test]
-    fn too_high_connect_density() {
-        let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].connect_density = 1.1;
-        let result = validate_instance_params(&params);
-
-        assert!(result.is_err());
-
-        assert_eq!(
-            result.unwrap_err().as_str(),
-            "connect_density must be in (0, 1]"
-        );
-    }
-
-    #[test]
     fn negative_connect_width() {
         let mut params = test_util::get_template_instance_params();
         params.layer_connections[0].connect_width = -0.1;
@@ -731,21 +764,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().as_str(),
-            "connect_width must be in [0, 2]"
-        );
-    }
-
-    #[test]
-    fn too_high_connect_width() {
-        let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].connect_width = 2.1;
-        let result = validate_instance_params(&params);
-
-        assert!(result.is_err());
-
-        assert_eq!(
-            result.unwrap_err().as_str(),
-            "connect_width must be in [0, 2]"
+            "connect_width must not be negative"
         );
     }
 

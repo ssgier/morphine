@@ -3,6 +3,7 @@ use std::{collections::hash_map::DefaultHasher, hash::Hasher};
 
 use float_cmp::assert_approx_eq;
 use itertools::{assert_equal, Itertools};
+use morphine::state_snapshot::StateSnapshot;
 use morphine::{
     api::SCMode,
     instance::{self, create_instance, Instance, TickInput, TickResult},
@@ -339,6 +340,7 @@ fn simple_potentiation_long_term_stdp() {
 #[test]
 fn synaptic_transmission_count() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.neuron_params.tau_membrane = 10.0;
     layer.neuron_params.refractory_period = 10;
@@ -350,15 +352,14 @@ fn synaptic_transmission_count() {
     connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
     connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
     connection_params.conduction_delay_position_distance_scale_factor = 0.0;
-    connection_params.connect_width = 2.0;
-    connection_params.connect_density = 1.0;
+    connection_params.connect_width = 0.0;
     connection_params
         .projection_params
         .synapse_params
         .max_weight = 1.0;
     params.layer_connections.push(connection_params.clone());
     connection_params.to_layer_id = 1;
-    connection_params.connect_density = 0.5;
+    connection_params.connect_width = f64::INFINITY;
     params.layer_connections.push(connection_params);
 
     let mut instance = create_instance(params).unwrap();
@@ -366,7 +367,7 @@ fn synaptic_transmission_count() {
     tick(&mut instance, &[0]);
     let tick_1_result = instance.tick_no_input();
 
-    assert_eq!(tick_1_result.synaptic_transmission_count, 15);
+    assert_eq!(tick_1_result.synaptic_transmission_count, 11);
 }
 
 #[test]
@@ -579,6 +580,7 @@ fn long_term_stdp_complex_scenario() {
     // nid 5 also fires before nid 19, but the psp arrives after nid 19 has spiked.
 
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.neuron_params.tau_membrane = 10.0;
     layer.neuron_params.refractory_period = 10;
@@ -818,6 +820,7 @@ fn simple_dopamine_scenario() {
 #[test]
 fn short_term_plasticity() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.neuron_params.refractory_period = 1;
     layer.num_neurons = 2;
@@ -888,9 +891,10 @@ fn short_term_plasticity() {
 
 fn get_scenario_template_params() -> InstanceParams {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.neuron_params.refractory_period = 10;
-    layer.num_neurons = 800;
+    layer.num_neurons = 80;
 
     layer.plasticity_modulation_params = Some(PlasticityModulationParams {
         tau_eligibility_trace: 1000.0,
@@ -903,7 +907,7 @@ fn get_scenario_template_params() -> InstanceParams {
 
     params.layers.push(layer.clone());
     layer.plasticity_modulation_params = None;
-    layer.num_neurons = 200;
+    layer.num_neurons = 20;
     layer.neuron_params.tau_membrane = 4.0;
     layer.neuron_params.refractory_period = 5;
     params.layers.push(layer);
@@ -911,8 +915,7 @@ fn get_scenario_template_params() -> InstanceParams {
     let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
     connection_params.initial_syn_weight = InitialSynWeight::Randomized(0.5);
     connection_params.conduction_delay_position_distance_scale_factor = 0.0;
-    connection_params.connect_width = 2.0;
-    connection_params.connect_density = 0.1;
+    connection_params.connect_width = 0.2;
     connection_params.conduction_delay_max_random_part = 20;
     connection_params
         .projection_params
@@ -934,7 +937,6 @@ fn get_scenario_template_params() -> InstanceParams {
         factor: 0.2,
     };
     params.layer_connections.push(connection_params.clone());
-    connection_params.connect_density = 0.25;
     connection_params.to_layer_id = 1;
     connection_params
         .projection_params
@@ -1083,7 +1085,6 @@ fn invariance_zero_effect_projection() {
     params.layers[1].num_neurons = 20;
     for conn in params.layer_connections.iter_mut() {
         conn.initial_syn_weight = InitialSynWeight::Constant(0.5);
-        conn.connect_density = 1.0;
         conn.conduction_delay_max_random_part = 0;
     }
 
@@ -1263,6 +1264,7 @@ fn no_self_innervation() {
 #[test]
 fn multiple_projections_same_layer_pair() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
 
     layer.num_neurons = 3;
@@ -1354,6 +1356,7 @@ fn compute_sc_hash_multi(pre_syn_nids: &[usize], post_syn_nid: usize) -> u64 {
 #[test]
 fn sc_hashes_single() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
 
     layer.num_neurons = 4;
@@ -1400,6 +1403,7 @@ fn sc_hashes_single() {
 #[test]
 fn sc_hashes_multi() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
 
     layer.num_neurons = 4;
@@ -1596,6 +1600,7 @@ fn sc_hashes_ephemeral_state_reset() {
 #[test]
 fn para_spikes_potentiation_no_depression() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1663,6 +1668,7 @@ fn para_spikes_potentiation_no_depression() {
 #[test]
 fn para_spikes_potentiation_and_depression() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1736,6 +1742,7 @@ fn para_spikes_potentiation_and_depression() {
 #[test]
 fn para_spike_and_normal_spike_simultaneous() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1781,6 +1788,7 @@ fn para_spike_and_normal_spike_simultaneous() {
 #[test]
 fn para_spike_then_normal_spike() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1819,6 +1827,7 @@ fn para_spike_then_normal_spike() {
 #[test]
 fn para_spike_then_force_spike() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1866,6 +1875,8 @@ fn para_spike_then_force_spike() {
 #[test]
 fn force_spike_then_para_spike() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
+
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1919,6 +1930,7 @@ fn force_spike_then_para_spike() {
 #[test]
 fn repeated_para_spikes_lead_to_normal_spikes() {
     let mut params = InstanceParams::default();
+    params.position_dim = 1;
     let mut layer = LayerParams::default();
     layer.num_neurons = 3;
     layer.use_para_spikes = true;
@@ -1995,4 +2007,115 @@ fn para_spikes_ephemeral_state_reset() {
     for weight in weights {
         assert_approx_eq!(f32, weight, 0.1);
     }
+}
+
+fn extract_post_syn_nids_from(state_snapshot: &StateSnapshot, pre_syn_nid: usize) -> Vec<usize> {
+    state_snapshot
+        .synapse_states
+        .iter()
+        .filter(|syn| syn.pre_syn_nid == pre_syn_nid)
+        .map(|syn| syn.post_syn_nid)
+        .collect_vec()
+}
+
+#[test]
+fn connectivity_1d_normal() {
+    let mut params = InstanceParams::default();
+    params.position_dim = 1;
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 100;
+
+    params.layers.push(layer.clone());
+    layer.num_neurons = 64;
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.connect_width = 0.1;
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
+    let post_syn_nids_from_0 = extract_post_syn_nids_from(&state_snapshot, 0);
+    let post_syn_nids_from_20 = extract_post_syn_nids_from(&state_snapshot, 20);
+    let post_syn_nids_from_99 = extract_post_syn_nids_from(&state_snapshot, 99);
+
+    assert_equal(post_syn_nids_from_0, [100, 101, 102, 103]);
+    assert_equal(post_syn_nids_from_20, [110, 111, 112, 113, 114, 115]);
+    assert_equal(post_syn_nids_from_99, [160, 161, 162, 163]);
+}
+
+#[test]
+fn connectivity_1d_hyper_sphere() {
+    let mut params = InstanceParams::default();
+    params.position_dim = 1;
+    params.hyper_sphere = true;
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 100;
+
+    params.layers.push(layer.clone());
+    layer.num_neurons = 64;
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.connect_width = 0.1;
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
+    let post_syn_nids_from_0 = extract_post_syn_nids_from(&state_snapshot, 0);
+    let post_syn_nids_from_20 = extract_post_syn_nids_from(&state_snapshot, 20);
+    let post_syn_nids_from_99 = extract_post_syn_nids_from(&state_snapshot, 99);
+
+    assert_equal(post_syn_nids_from_0, [100, 101, 102, 103, 161, 162, 163]);
+    assert_equal(post_syn_nids_from_20, [110, 111, 112, 113, 114, 115]);
+    assert_equal(post_syn_nids_from_99, [100, 101, 102, 160, 161, 162, 163]);
+}
+
+#[test]
+fn connectivity_2d_normal() {
+    let mut params = InstanceParams::default();
+    params.position_dim = 2;
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 121;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.connect_width = 0.40001;
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
+    let post_syn_nids_from_67 = extract_post_syn_nids_from(&state_snapshot, 67);
+
+    assert_equal(
+        post_syn_nids_from_67,
+        [166, 176, 177, 178, 187, 188, 189, 190, 198, 199, 200, 210],
+    );
+}
+
+#[test]
+fn connectivity_2d_hyper_sphere() {
+    let mut params = InstanceParams::default();
+    params.position_dim = 2;
+    params.hyper_sphere = true;
+    let mut layer = LayerParams::default();
+    layer.num_neurons = 100;
+    params.layers.push(layer.clone());
+    params.layers.push(layer);
+
+    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    connection.connect_width = 0.40001;
+    params.layer_connections.push(connection);
+
+    let mut instance = create_instance(params).unwrap();
+    let state_snapshot = instance.extract_state_snapshot();
+    let post_syn_nids_from_61 = extract_post_syn_nids_from(&state_snapshot, 61);
+
+    assert_equal(
+        post_syn_nids_from_61,
+        [
+            141, 150, 151, 152, 160, 161, 162, 163, 169, 170, 171, 172, 181,
+        ],
+    );
 }

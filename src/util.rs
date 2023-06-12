@@ -19,6 +19,29 @@ pub fn compute_stdp(t_pre_minus_post: i64, stdp_params: &StdpParams) -> f32 {
     }
 }
 
+pub fn compute_connection_probabiltity(
+    position_distance: f64,
+    connect_width: f64,
+    smooth_connect_probability: bool,
+) -> f64 {
+    if smooth_connect_probability {
+        if connect_width == 0.0 {
+            if position_distance > 0.0 {
+                0.0
+            } else {
+                1.0
+            }
+        } else {
+            let ratio = position_distance / (0.5 * connect_width);
+            (-ratio * ratio).exp()
+        }
+    } else if position_distance <= 0.5 * connect_width {
+        1.0
+    } else {
+        0.0
+    }
+}
+
 pub fn get_partition_range(
     num_threads: usize,
     thread_id: usize,
@@ -49,24 +72,13 @@ pub struct SynapseCoordinate {
 
 #[cfg(test)]
 pub mod test_util {
-    use float_cmp::{assert_approx_eq, ApproxEq};
-    use std::fmt::Debug;
 
     use crate::params::InstanceParams;
 
-    pub fn assert_approx_eq_slice<T>(left: &[T], right: &[T])
-    where
-        T: ApproxEq + Debug + Copy,
-    {
-        assert_eq!(left.len(), right.len());
-
-        for item in left.iter().zip(right) {
-            assert_approx_eq!(T, *item.0, *item.1);
-        }
-    }
-
     pub fn get_template_instance_params() -> InstanceParams {
         let params_yaml_str = r#"
+    position_dim: 1
+    hyper_sphere: false
     layers:
     - num_neurons: 800
       neuron_params:
@@ -119,8 +131,8 @@ pub mod test_util {
             factor_pre_after_post: 0.012
             tau_pre_after_post: 20.0
           tau: 500.0
-      connect_density: 0.1
-      connect_width: 2.0
+      smooth_connect_probability: false
+      connect_width: 1.0
       initial_syn_weight: !Randomized 0.5
       conduction_delay_max_random_part: 20
       conduction_delay_position_distance_scale_factor: 0.0
@@ -148,8 +160,8 @@ pub mod test_util {
             factor_pre_after_post: 0.012
             tau_pre_after_post: 20.0
           tau: 500.0
-      connect_density: 0.25
-      connect_width: 2.0
+      smooth_connect_probability: false
+      connect_width: 1.0
       initial_syn_weight: !Randomized 0.5
       conduction_delay_max_random_part: 20
       conduction_delay_position_distance_scale_factor: 0.0
@@ -164,8 +176,8 @@ pub mod test_util {
         stp_params: NoStp
         long_term_stdp_params: null
         short_term_stdp_params: null
-      connect_density: 0.25
-      connect_width: 2.0
+      smooth_connect_probability: false
+      connect_width: 1.0
       initial_syn_weight: !Constant 0.85
       conduction_delay_max_random_part: 0
       conduction_delay_position_distance_scale_factor: 0.0
@@ -180,8 +192,8 @@ pub mod test_util {
         stp_params: NoStp
         long_term_stdp_params: null
         short_term_stdp_params: null
-      connect_density: 0.25
-      connect_width: 2.0
+      smooth_connect_probability: false
+      connect_width: 1.0
       initial_syn_weight: !Constant 0.85
       conduction_delay_max_random_part: 0
       conduction_delay_position_distance_scale_factor: 0.0
@@ -266,5 +278,29 @@ mod tests {
         assert_eq!(get_partition_range(4, 1, 13), Range { start: 4, end: 7 });
         assert_eq!(get_partition_range(4, 2, 13), Range { start: 7, end: 10 });
         assert_eq!(get_partition_range(4, 3, 13), Range { start: 10, end: 13 });
+    }
+
+    #[test]
+    fn connection_probability() {
+        assert_eq!(compute_connection_probabiltity(0.0, 0.0, false), 1.0);
+        assert_eq!(compute_connection_probabiltity(0.25, 0.5, false), 1.0);
+        assert_eq!(compute_connection_probabiltity(0.3, 0.5, false), 0.0);
+        assert_eq!(
+            compute_connection_probabiltity(0.6, f64::INFINITY, false),
+            1.0
+        );
+
+        assert_eq!(compute_connection_probabiltity(0.0, 1.0, true), 1.0);
+        assert_eq!(compute_connection_probabiltity(0.0, 0.0, true), 1.0);
+        assert_approx_eq!(
+            f64,
+            compute_connection_probabiltity(1.0, f64::INFINITY, true),
+            1.0
+        );
+        assert_approx_eq!(
+            f64,
+            compute_connection_probabiltity(0.25, 1.0, true),
+            (-0.25f64).exp()
+        );
     }
 }

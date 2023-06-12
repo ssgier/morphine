@@ -2,6 +2,8 @@ use morphine::params::InstanceParams;
 
 pub fn get_scenario_params() -> InstanceParams {
     let params_yaml_str = r#"
+position_dim: 1
+hyper_sphere: false
 layers:
 - num_neurons: 800
   neuron_params:
@@ -54,8 +56,8 @@ layer_connections:
         factor_pre_after_post: 0.012
         tau_pre_after_post: 20.0
       tau: 500.0
-  connect_density: 0.1
-  connect_width: 2.0
+  smooth_connect_probability: true
+  connect_width: 0.1
   initial_syn_weight: !Randomized 0.5
   conduction_delay_max_random_part: 20
   conduction_delay_position_distance_scale_factor: 0.0
@@ -83,8 +85,8 @@ layer_connections:
         factor_pre_after_post: 0.012
         tau_pre_after_post: 20.0
       tau: 500.0
-  connect_density: 0.25
-  connect_width: 2.0
+  smooth_connect_probability: true
+  connect_width: 0.25
   initial_syn_weight: !Randomized 0.5
   conduction_delay_max_random_part: 20
   conduction_delay_position_distance_scale_factor: 0.0
@@ -99,8 +101,8 @@ layer_connections:
     stp_params: NoStp
     long_term_stdp_params: null
     short_term_stdp_params: null
-  connect_density: 0.25
-  connect_width: 2.0
+  smooth_connect_probability: true
+  connect_width: 0.25
   initial_syn_weight: !Constant 0.85
   conduction_delay_max_random_part: 0
   conduction_delay_position_distance_scale_factor: 0.0
@@ -115,8 +117,8 @@ layer_connections:
     stp_params: NoStp
     long_term_stdp_params: null
     short_term_stdp_params: null
-  connect_density: 0.25
-  connect_width: 2.0
+  smooth_connect_probability: true
+  connect_width: 0.25
   initial_syn_weight: !Constant 0.85
   conduction_delay_max_random_part: 0
   conduction_delay_position_distance_scale_factor: 0.0
