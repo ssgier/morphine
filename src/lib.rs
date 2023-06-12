@@ -4,6 +4,7 @@ pub mod params;
 pub mod state_snapshot;
 
 mod batched_ring_buffer;
+mod distance;
 mod neuron;
 mod partition;
 mod plasticity_modulation;

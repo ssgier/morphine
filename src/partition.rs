@@ -1,4 +1,5 @@
 use crate::api::SCMode;
+use crate::distance::DistanceCalculator;
 use crate::partition::Request::ExtractStateSnapshot;
 use crate::partition::Request::FlushSCHashes;
 use crate::partition::Request::ResetEphemeralState;
@@ -6,9 +7,8 @@ use crate::partition::Request::SetSCMode;
 use crate::partition::Request::Tick;
 use bus::BusReader;
 use itertools::Itertools;
-use rand::{
-    distributions::Uniform, prelude::Distribution, rngs::StdRng, seq::SliceRandom, SeedableRng,
-};
+use rand::distributions::Bernoulli;
+use rand::{distributions::Uniform, prelude::Distribution, rngs::StdRng, SeedableRng};
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::{collections::hash_map::DefaultHasher, sync::mpsc::Sender as MpscSender};
@@ -124,7 +124,6 @@ pub fn create_partitions(
     }
 
     let seed = params.technical_params.seed_override.unwrap_or(0);
-    let mut rng = StdRng::seed_from_u64(seed);
 
     for (layer_id, layer_params) in params.layers.iter().enumerate() {
         let mut nid_to_projections = HashMap::default();
@@ -165,44 +164,31 @@ pub fn create_partitions(
 
                 let from_num_neurons = params.layers[connection_params.from_layer_id].num_neurons;
 
-                let from_positions = get_positions_1d(from_num_neurons);
-                let to_positions = get_positions_1d(to_num_neurons);
+                let distance_calc = DistanceCalculator::new(
+                    params.position_dim,
+                    params.hyper_sphere,
+                    from_num_neurons,
+                    to_num_neurons,
+                );
 
-                let to_delta = 1.0 / ((to_num_neurons - 1) as f64);
-                let to_indexes = Vec::from_iter(0..to_num_neurons);
-
-                for (from_idx, from_pos) in from_positions.iter().enumerate() {
+                for from_idx in 0..from_num_neurons {
                     let from_nid = layer_nid_starts[connection_params.from_layer_id] + from_idx;
-
-                    let to_pos_lower_bound = from_pos - 0.5 * connection_params.connect_width;
-                    let to_pos_upper_bound = from_pos + 0.5 * connection_params.connect_width;
-
-                    let to_idx_lower_bound =
-                        (((to_pos_lower_bound - f64::EPSILON) / to_delta).ceil() as usize).max(0);
-                    let to_idx_upper_bound = (((to_pos_upper_bound + f64::EPSILON) / to_delta)
-                        .floor() as usize)
-                        .min(to_num_neurons - 1);
-
-                    if to_idx_upper_bound < to_idx_lower_bound {
-                        continue;
-                    }
-
-                    let target_slice = &to_indexes[to_idx_lower_bound..=to_idx_upper_bound];
-
-                    let num_targets = (target_slice.len() as f64
-                        * connection_params.connect_density)
-                        .round() as usize;
 
                     let mut synapses = Vec::new();
 
                     // seed generators in such a way that the result is independent of the number of threads
-                    for to_idx in target_slice.choose_multiple(&mut rng, num_targets) {
-                        if partition_range.contains(to_idx) {
-                            let to_pos = to_positions[*to_idx];
+                    for to_idx in 0..to_num_neurons {
+                        if partition_range.contains(&to_idx) {
+                            let position_distance =
+                                distance_calc.calculate_distance(from_idx, to_idx);
 
-                            let position_distance = (to_pos - from_pos).abs();
+                            let connection_probability = util::compute_connection_probabiltity(
+                                position_distance,
+                                connection_params.connect_width,
+                                connection_params.smooth_connect_probability,
+                            );
 
-                            let neuron_idx = *to_idx - partition_range.start;
+                            let neuron_idx = to_idx - partition_range.start;
 
                             let post_syn_nid = neuron_idx + nid_start;
                             let pre_syn_nid = from_nid;
@@ -211,26 +197,33 @@ pub fn create_partitions(
                                 seed,
                                 pre_syn_nid,
                                 post_syn_nid,
+                                projection_id,
                             )));
 
-                            let conduction_delay = compute_conduction_delay(
-                                connection_params,
-                                position_distance,
-                                &mut rng,
-                            );
+                            let is_connection = Bernoulli::new(connection_probability)
+                                .unwrap()
+                                .sample(&mut rng);
 
-                            let init_weight = compute_initial_weight(
-                                &connection_params.initial_syn_weight,
-                                &mut rng,
-                            );
+                            if is_connection {
+                                let conduction_delay = compute_conduction_delay(
+                                    connection_params,
+                                    position_distance,
+                                    &mut rng,
+                                );
 
-                            if pre_syn_nid != post_syn_nid
-                                || connection_params.allow_self_innervation
-                            {
-                                let synapse =
-                                    Synapse::new(neuron_idx, conduction_delay, init_weight);
+                                let init_weight = compute_initial_weight(
+                                    &connection_params.initial_syn_weight,
+                                    &mut rng,
+                                );
 
-                                synapses.push(synapse);
+                                if pre_syn_nid != post_syn_nid
+                                    || connection_params.allow_self_innervation
+                                {
+                                    let synapse =
+                                        Synapse::new(neuron_idx, conduction_delay, init_weight);
+
+                                    synapses.push(synapse);
+                                }
                             }
                         }
                     }
@@ -325,23 +318,6 @@ fn compute_conduction_delay(
         + connection_params.conduction_delay_add_on;
 
     result as u8
-}
-
-fn get_positions_1d(num_neurons: usize) -> Vec<f64> {
-    if num_neurons == 1 {
-        vec![0.5]
-    } else {
-        let delta = 1.0 / ((num_neurons - 1) as f64);
-
-        let mut positions = Vec::new();
-
-        for i in 0..num_neurons {
-            let position = delta * (i as f64);
-            positions.push(position);
-        }
-
-        positions
-    }
 }
 
 impl Partition {
@@ -836,7 +812,6 @@ mod tests {
     };
 
     use super::*;
-    use crate::util::test_util::assert_approx_eq_slice;
     use itertools::assert_equal;
     use rand::SeedableRng;
 
@@ -846,8 +821,8 @@ mod tests {
             from_layer_id: 5,
             to_layer_id: 3,
             projection_params: ProjectionParams::default(),
-            connect_density: 1.0,
-            connect_width: 1.0,
+            smooth_connect_probability: false,
+            connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.2),
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
@@ -893,8 +868,8 @@ mod tests {
             from_layer_id: 0,
             to_layer_id: 1,
             projection_params: ProjectionParams::default(),
-            connect_density: 1.0,
-            connect_width: 2.0,
+            smooth_connect_probability: false,
+            connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.5),
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 2.0,
@@ -905,6 +880,8 @@ mod tests {
         let instance_params = InstanceParams {
             layers,
             layer_connections: vec![connection_params],
+            position_dim: 1,
+            hyper_sphere: false,
             technical_params: TechnicalParams::default(),
         };
 
@@ -954,8 +931,8 @@ mod tests {
             from_layer_id: 0,
             to_layer_id: 0,
             projection_params: ProjectionParams::default(),
-            connect_density: 1.0,
-            connect_width: 2.0,
+            smooth_connect_probability: false,
+            connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Randomized(0.2),
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
@@ -990,16 +967,9 @@ mod tests {
     }
 
     #[test]
-    fn positions_1d() {
-        assert_approx_eq_slice(&get_positions_1d(1), &vec![0.5]);
-        assert_approx_eq_slice(&get_positions_1d(2), &vec![0.0, 1.0]);
-        assert_approx_eq_slice(&get_positions_1d(3), &vec![0.0, 0.5, 1.0]);
-        assert_approx_eq_slice(&get_positions_1d(4), &vec![0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0]);
-    }
-
-    #[test]
     fn partition_creation() {
         let mut params = InstanceParams::default();
+        params.position_dim = 1;
 
         let layer_0 = LayerParams {
             num_neurons: 5,
@@ -1030,8 +1000,8 @@ mod tests {
             from_layer_id: 1,
             to_layer_id: 2,
             projection_params: ProjectionParams::default(),
-            connect_density: 1.0,
-            connect_width: 2.0,
+            smooth_connect_probability: false,
+            connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.2),
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 10.0,
@@ -1122,20 +1092,25 @@ mod tests {
         );
 
         // sparse connection
-        params.layer_connections[0].connect_density = 0.25;
+        params.layer_connections[0].connect_width = 0.25;
         let partitions = create_partitions(1, 0, &params);
 
         assert_eq!(partitions[2].nid_to_projections.len(), 100);
 
         for nid in 5..105 {
             assert!(partitions[2].nid_to_projections.contains_key(&nid));
-            assert_eq!(partitions[2].nid_to_projections[&nid][0].synapses.len(), 1);
+
+            // the below boundaries are chosen intuitively. Might not work with different seed or
+            // generator
+            assert!(partitions[2].nid_to_projections[&nid][0].synapses.len() > 1);
+            assert!(partitions[2].nid_to_projections[&nid][0].synapses.len() < 5);
         }
     }
 
     #[test]
     fn zero_connect_width() {
         let mut params = InstanceParams::default();
+        params.position_dim = 1;
         let mut layer = LayerParams::default();
         layer.num_neurons = 5;
         params.layers.push(layer.clone());
@@ -1144,7 +1119,6 @@ mod tests {
 
         let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
         connection.connect_width = 0.0;
-        connection.connect_density = 1.0;
 
         params.layer_connections.push(connection);
 
