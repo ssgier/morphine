@@ -257,7 +257,8 @@ fn validate_grid(position_dim: usize, num_neurons: usize) -> Result<(), SimpleEr
     if position_dim < 2 {
         Ok(())
     } else {
-        let grid_validity = (num_neurons as f64).powf(1.0 / position_dim as f64).fract() == 0.0;
+        let grid_size = (num_neurons as f64).powf(1.0 / position_dim as f64).round();
+        let grid_validity = grid_size.powf(position_dim as f64) == num_neurons as f64;
 
         if !grid_validity {
             Err(SimpleError::new(format!(
@@ -270,7 +271,10 @@ fn validate_grid(position_dim: usize, num_neurons: usize) -> Result<(), SimpleEr
     }
 }
 
-fn validate_layer_params(layer_params: &LayerParams, position_dim: usize) -> Result<(), SimpleError> {
+fn validate_layer_params(
+    layer_params: &LayerParams,
+    position_dim: usize,
+) -> Result<(), SimpleError> {
     validate_grid(position_dim, layer_params.num_neurons)?;
     validate_neuron_params(&layer_params.neuron_params)?;
 
@@ -537,6 +541,7 @@ mod tests {
 
         test_grid_validation(3, 8, true);
         test_grid_validation(3, 9, false);
+        test_grid_validation(3, 125, true);
     }
 
     #[test]
