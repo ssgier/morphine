@@ -108,29 +108,27 @@ pub mod test_util {
         voltage_floor: 0.0
       plasticity_modulation_params: null
       use_para_spikes: false
-    layer_connections:
+    projections:
     - from_layer_id: 0
       to_layer_id: 0
-      projection_params:
-        synapse_params:
-          max_weight: 0.5
-          weight_scale_factor: 1.0
-        stp_params: !Depression
-          tau: 800.0
-          p0: 0.9
-          factor: 0.1
-        long_term_stdp_params:
-          factor_pre_before_post: 0.1
+      max_syn_weight: 0.5
+      weight_scale_factor: 1.0
+      stp_params: !Depression
+        tau: 800.0
+        p0: 0.9
+        factor: 0.1
+      long_term_stdp_params:
+        factor_pre_before_post: 0.1
+        tau_pre_before_post: 20.0
+        factor_pre_after_post: -0.12
+        tau_pre_after_post: 20.0
+      short_term_stdp_params:
+        stdp_params:
+          factor_pre_before_post: 0.01
           tau_pre_before_post: 20.0
-          factor_pre_after_post: -0.12
+          factor_pre_after_post: 0.012
           tau_pre_after_post: 20.0
-        short_term_stdp_params:
-          stdp_params:
-            factor_pre_before_post: 0.01
-            tau_pre_before_post: 20.0
-            factor_pre_after_post: 0.012
-            tau_pre_after_post: 20.0
-          tau: 500.0
+        tau: 500.0
       smooth_connect_probability: false
       connect_width: 1.0
       initial_syn_weight: !Randomized 0.5
@@ -140,26 +138,24 @@ pub mod test_util {
       allow_self_innervation: true
     - from_layer_id: 0
       to_layer_id: 1
-      projection_params:
-        synapse_params:
-          max_weight: 0.5
-          weight_scale_factor: 2.0
-        stp_params: !Depression
-          tau: 800.0
-          p0: 0.9
-          factor: 0.1
-        long_term_stdp_params:
-          factor_pre_before_post: 0.1
+      max_syn_weight: 0.5
+      weight_scale_factor: 2.0
+      stp_params: !Depression
+        tau: 800.0
+        p0: 0.9
+        factor: 0.1
+      long_term_stdp_params:
+        factor_pre_before_post: 0.1
+        tau_pre_before_post: 20.0
+        factor_pre_after_post: -0.12
+        tau_pre_after_post: 20.0
+      short_term_stdp_params:
+        stdp_params:
+          factor_pre_before_post: 0.01
           tau_pre_before_post: 20.0
-          factor_pre_after_post: -0.12
+          factor_pre_after_post: 0.012
           tau_pre_after_post: 20.0
-        short_term_stdp_params:
-          stdp_params:
-            factor_pre_before_post: 0.01
-            tau_pre_before_post: 20.0
-            factor_pre_after_post: 0.012
-            tau_pre_after_post: 20.0
-          tau: 500.0
+        tau: 500.0
       smooth_connect_probability: false
       connect_width: 1.0
       initial_syn_weight: !Randomized 0.5
@@ -169,13 +165,11 @@ pub mod test_util {
       allow_self_innervation: true
     - from_layer_id: 1
       to_layer_id: 0
-      projection_params:
-        synapse_params:
-          max_weight: 0.5
-          weight_scale_factor: -1.0
-        stp_params: NoStp
-        long_term_stdp_params: null
-        short_term_stdp_params: null
+      max_syn_weight: 0.5
+      weight_scale_factor: -1.0
+      stp_params: NoStp
+      long_term_stdp_params: null
+      short_term_stdp_params: null
       smooth_connect_probability: false
       connect_width: 1.0
       initial_syn_weight: !Constant 0.85
@@ -185,13 +179,11 @@ pub mod test_util {
       allow_self_innervation: true
     - from_layer_id: 1
       to_layer_id: 1
-      projection_params:
-        synapse_params:
-          max_weight: 0.5
-          weight_scale_factor: -1.0
-        stp_params: NoStp
-        long_term_stdp_params: null
-        short_term_stdp_params: null
+      max_syn_weight: 0.5
+      weight_scale_factor: -1.0
+      stp_params: NoStp
+      long_term_stdp_params: null
+      short_term_stdp_params: null
       smooth_connect_probability: false
       connect_width: 1.0
       initial_syn_weight: !Constant 0.85

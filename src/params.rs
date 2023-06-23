@@ -5,7 +5,7 @@ use simple_error::SimpleError;
 #[serde(deny_unknown_fields)]
 pub struct InstanceParams {
     pub layers: Vec<LayerParams>,
-    pub layer_connections: Vec<LayerConnectionParams>,
+    pub projections: Vec<ProjectionParams>,
     pub position_dim: usize,
     pub hyper_sphere: bool,
     pub technical_params: TechnicalParams,
@@ -22,25 +22,28 @@ pub struct LayerParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LayerConnectionParams {
+pub struct ProjectionParams {
     pub from_layer_id: usize,
     pub to_layer_id: usize,
-    pub projection_params: ProjectionParams,
     pub smooth_connect_probability: bool,
     pub connect_width: f64,
     pub initial_syn_weight: InitialSynWeight,
+    pub max_syn_weight: f32,
     pub conduction_delay_max_random_part: usize,
     pub conduction_delay_position_distance_scale_factor: f64,
     pub conduction_delay_add_on: usize,
     pub allow_self_innervation: bool,
+    pub stp_params: StpParams,
+    pub long_term_stdp_params: Option<StdpParams>,
+    pub short_term_stdp_params: Option<ShortTermStdpParams>,
+    pub weight_scale_factor: f32,
 }
 
-impl LayerConnectionParams {
-    pub fn defaults_for_layer_ids(from_layer_id: usize, to_layer_id: usize) -> Self {
+impl ProjectionParams {
+    pub const fn defaults_for_layer_ids(from_layer_id: usize, to_layer_id: usize) -> Self {
         Self {
             from_layer_id,
             to_layer_id,
-            projection_params: ProjectionParams::default(),
             smooth_connect_probability: false,
             connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(1.0),
@@ -48,17 +51,13 @@ impl LayerConnectionParams {
             conduction_delay_position_distance_scale_factor: 0.0,
             conduction_delay_add_on: 0,
             allow_self_innervation: true,
+            stp_params: StpParams::NoStp,
+            long_term_stdp_params: None,
+            short_term_stdp_params: None,
+            max_syn_weight: 1.0,
+            weight_scale_factor: 1.0,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectionParams {
-    pub synapse_params: SynapseParams,
-    pub stp_params: StpParams,
-    pub long_term_stdp_params: Option<StdpParams>,
-    pub short_term_stdp_params: Option<ShortTermStdpParams>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,13 +65,6 @@ pub struct ProjectionParams {
 pub enum InitialSynWeight {
     Randomized(f32),
     Constant(f32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SynapseParams {
-    pub max_weight: f32,
-    pub weight_scale_factor: f32,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -178,15 +170,6 @@ impl Default for TechnicalParams {
     }
 }
 
-impl Default for SynapseParams {
-    fn default() -> Self {
-        Self {
-            max_weight: 1.0,
-            weight_scale_factor: 1.0,
-        }
-    }
-}
-
 impl Default for PlasticityModulationParams {
     fn default() -> Self {
         Self {
@@ -230,22 +213,22 @@ pub fn validate_instance_params(instance_params: &InstanceParams) -> Result<(), 
         }
     }
 
-    for conn_params in &instance_params.layer_connections {
-        if conn_params.from_layer_id >= instance_params.layers.len() {
+    for projection_params in &instance_params.projections {
+        if projection_params.from_layer_id >= instance_params.layers.len() {
             return Err(SimpleError::new(format!(
                 "invalid from_layer_id: {}",
-                conn_params.from_layer_id
+                projection_params.from_layer_id
             )));
         }
 
-        if conn_params.to_layer_id >= instance_params.layers.len() {
+        if projection_params.to_layer_id >= instance_params.layers.len() {
             return Err(SimpleError::new(format!(
                 "invalid to_layer_id: {}",
-                conn_params.to_layer_id
+                projection_params.to_layer_id
             )));
         }
 
-        validate_connection_params(conn_params)?;
+        validate_projection_params(projection_params)?;
     }
 
     validate_technical_params(&instance_params.technical_params)?;
@@ -285,16 +268,25 @@ fn validate_layer_params(
     Ok(())
 }
 
-fn validate_connection_params(
-    connection_params: &LayerConnectionParams,
-) -> Result<(), SimpleError> {
-    validate_projection_params(&connection_params.projection_params)?;
+fn validate_projection_params(projection_params: &ProjectionParams) -> Result<(), SimpleError> {
+    validate_stp_params(&projection_params.stp_params)?;
 
-    if connection_params.connect_width < 0.0 {
+    if let Some(long_term_stdp_params) = &projection_params.long_term_stdp_params {
+        validate_stdp_params(long_term_stdp_params)?;
+    }
+
+    if let Some(short_term_stdp_params) = &projection_params.short_term_stdp_params {
+        validate_short_term_stdp_params(short_term_stdp_params)?;
+    }
+    if projection_params.connect_width < 0.0 {
         return Err(SimpleError::new("connect_width must not be negative"));
     }
 
-    match connection_params.initial_syn_weight {
+    if projection_params.max_syn_weight <= 0.0 {
+        return Err(SimpleError::new("max_syn_weight must be strictly positive"));
+    }
+
+    match projection_params.initial_syn_weight {
         InitialSynWeight::Randomized(max_weight) => {
             if max_weight <= 0.0 {
                 return Err(SimpleError::new(
@@ -311,7 +303,7 @@ fn validate_connection_params(
         }
     }
 
-    if connection_params.conduction_delay_position_distance_scale_factor < 0.0 {
+    if projection_params.conduction_delay_position_distance_scale_factor < 0.0 {
         return Err(SimpleError::new(
             "conduction_delay_position_distance_scale_factor must not be negative",
         ));
@@ -402,29 +394,6 @@ fn validate_plasticity_modulation_params(
         return Err(SimpleError::new(
             "dopamine_flush_period must be a multiple of dopamine_conflation_period",
         ));
-    }
-
-    Ok(())
-}
-
-fn validate_projection_params(prj_params: &ProjectionParams) -> Result<(), SimpleError> {
-    validate_synapse_params(&prj_params.synapse_params)?;
-    validate_stp_params(&prj_params.stp_params)?;
-
-    if let Some(long_term_stdp_params) = &prj_params.long_term_stdp_params {
-        validate_stdp_params(long_term_stdp_params)?;
-    }
-
-    if let Some(short_term_stdp_params) = &prj_params.short_term_stdp_params {
-        validate_short_term_stdp_params(short_term_stdp_params)?;
-    }
-
-    Ok(())
-}
-
-fn validate_synapse_params(synapse_params: &SynapseParams) -> Result<(), SimpleError> {
-    if synapse_params.max_weight <= 0.0 {
-        return Err(SimpleError::new("max_weight must be strictly positive"));
     }
 
     Ok(())
@@ -740,7 +709,7 @@ mod tests {
     #[test]
     fn invalid_from_layer_id() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].from_layer_id = 2;
+        params.projections[0].from_layer_id = 2;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -751,7 +720,7 @@ mod tests {
     #[test]
     fn invalid_to_layer_id() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].to_layer_id = 2;
+        params.projections[0].to_layer_id = 2;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -762,7 +731,7 @@ mod tests {
     #[test]
     fn negative_connect_width() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].connect_width = -0.1;
+        params.projections[0].connect_width = -0.1;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -776,7 +745,7 @@ mod tests {
     #[test]
     fn zero_initial_weight_randomized() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].initial_syn_weight = InitialSynWeight::Randomized(0.0);
+        params.projections[0].initial_syn_weight = InitialSynWeight::Randomized(0.0);
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -790,7 +759,7 @@ mod tests {
     #[test]
     fn negative_initial_weight_constant() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].initial_syn_weight = InitialSynWeight::Constant(-0.1);
+        params.projections[0].initial_syn_weight = InitialSynWeight::Constant(-0.1);
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -804,7 +773,7 @@ mod tests {
     #[test]
     fn negative_conduction_delay_distance_scale_factor() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].conduction_delay_position_distance_scale_factor = -0.1;
+        params.projections[0].conduction_delay_position_distance_scale_factor = -0.1;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
@@ -816,26 +785,23 @@ mod tests {
     }
 
     #[test]
-    fn zero_max_weight() {
+    fn zero_max_syn_weight() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0]
-            .projection_params
-            .synapse_params
-            .max_weight = 0.0;
+        params.projections[0].max_syn_weight = 0.0;
         let result = validate_instance_params(&params);
 
         assert!(result.is_err());
 
         assert_eq!(
             result.unwrap_err().as_str(),
-            "max_weight must be strictly positive"
+            "max_syn_weight must be strictly positive"
         );
     }
 
     #[test]
     fn zero_tau_stp_facilitation() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+        params.projections[0].stp_params = StpParams::Facilitation {
             tau: 0.0,
             p0: 0.5,
             factor: 0.5,
@@ -853,7 +819,7 @@ mod tests {
     #[test]
     fn negative_p0_facilitation() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+        params.projections[0].stp_params = StpParams::Facilitation {
             tau: 100.0,
             p0: -0.1,
             factor: 0.5,
@@ -871,7 +837,7 @@ mod tests {
     #[test]
     fn zero_factor_facilitation() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Facilitation {
+        params.projections[0].stp_params = StpParams::Facilitation {
             tau: 100.0,
             p0: 0.5,
             factor: 0.0,
@@ -889,7 +855,7 @@ mod tests {
     #[test]
     fn zero_tau_stp_depression() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+        params.projections[0].stp_params = StpParams::Depression {
             tau: 0.0,
             p0: 0.5,
             factor: 0.5,
@@ -907,7 +873,7 @@ mod tests {
     #[test]
     fn too_high_p0_depression() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+        params.projections[0].stp_params = StpParams::Depression {
             tau: 100.0,
             p0: 1.1,
             factor: 0.5,
@@ -925,7 +891,7 @@ mod tests {
     #[test]
     fn too_high_factor_depression() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0].projection_params.stp_params = StpParams::Depression {
+        params.projections[0].stp_params = StpParams::Depression {
             tau: 100.0,
             p0: 0.5,
             factor: 1.1,
@@ -943,8 +909,7 @@ mod tests {
     #[test]
     fn zero_tau_pre_before_post_short_term_stdp() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0]
-            .projection_params
+        params.projections[0]
             .short_term_stdp_params
             .as_mut()
             .unwrap()
@@ -963,8 +928,7 @@ mod tests {
     #[test]
     fn zero_tau_pre_after_post_long_term_stdp() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0]
-            .projection_params
+        params.projections[0]
             .long_term_stdp_params
             .as_mut()
             .unwrap()
@@ -982,8 +946,7 @@ mod tests {
     #[test]
     fn zero_tau_short_term_stdp() {
         let mut params = test_util::get_template_instance_params();
-        params.layer_connections[0]
-            .projection_params
+        params.projections[0]
             .short_term_stdp_params
             .as_mut()
             .unwrap()

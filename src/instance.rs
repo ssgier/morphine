@@ -417,7 +417,7 @@ impl Drop for Instance {
 #[cfg(test)]
 mod tests {
     use crate::params::{
-        InitialSynWeight, LayerConnectionParams, PlasticityModulationParams, ShortTermStdpParams,
+        InitialSynWeight, ProjectionParams, PlasticityModulationParams, ShortTermStdpParams,
         StdpParams, StpParams,
     };
     use crate::params::{LayerParams, NeuronParams};
@@ -835,29 +835,29 @@ mod tests {
         last_layer.num_neurons = 1;
         params.layers.push(last_layer);
 
-        let mut layer_connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+        let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
 
-        layer_connection.projection_params.stp_params = StpParams::Depression {
+        projection.stp_params = StpParams::Depression {
             tau: 500.0,
             p0: 0.5,
             factor: 0.5,
         };
 
-        layer_connection.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+        projection.short_term_stdp_params = Some(ShortTermStdpParams {
             tau: 500.0,
             stdp_params: StdpParams::default(),
         });
 
-        layer_connection.projection_params.long_term_stdp_params = Some(StdpParams::default());
-        layer_connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
-        layer_connection.projection_params.synapse_params.max_weight = 1.0;
-        layer_connection.conduction_delay_add_on = 1;
+        projection.long_term_stdp_params = Some(StdpParams::default());
+        projection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+        projection.max_syn_weight = 1.0;
+        projection.conduction_delay_add_on = 1;
 
-        params.layer_connections.push(layer_connection);
+        params.projections.push(projection);
 
-        let mut last_layer_connection = LayerConnectionParams::defaults_for_layer_ids(1, 2);
-        last_layer_connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
-        params.layer_connections.push(last_layer_connection);
+        let mut last_projection = ProjectionParams::defaults_for_layer_ids(1, 2);
+        last_projection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+        params.projections.push(last_projection);
 
         let mut instance = create_instance(params).unwrap();
 

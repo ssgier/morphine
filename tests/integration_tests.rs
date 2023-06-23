@@ -8,8 +8,8 @@ use morphine::{
     api::SCMode,
     instance::{self, create_instance, Instance, TickInput, TickResult},
     params::{
-        InitialSynWeight, InstanceParams, LayerConnectionParams, LayerParams,
-        PlasticityModulationParams, ShortTermStdpParams, StdpParams, StpParams,
+        InitialSynWeight, InstanceParams, LayerParams, PlasticityModulationParams,
+        ProjectionParams, ShortTermStdpParams, StdpParams, StpParams,
     },
 };
 use rand::{
@@ -30,9 +30,9 @@ fn make_simple_1_in_1_out_instance(weight: f32) -> Instance {
     layer.num_neurons = 1;
     params.layers.push(layer.clone());
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(weight);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(weight);
+    params.projections.push(projection_params);
 
     create_instance(params).unwrap()
 }
@@ -191,23 +191,20 @@ fn two_epsps_and_one_ipsp() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    params.projections.push(projection_params);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 2);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params.conduction_delay_add_on = 1;
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 2);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.conduction_delay_add_on = 1;
+    params.projections.push(projection_params);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(1, 2);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = -1.0; // inhibition
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(1, 2);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_params.weight_scale_factor = -1.0; // inhibition
 
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -240,14 +237,11 @@ fn voltage_floor() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = -1.0;
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.weight_scale_factor = -1.0;
 
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -271,9 +265,9 @@ fn threshold_adaptation() {
     layer.neuron_params.adaptation_threshold = 0.4;
     layer.neuron_params.tau_threshold = 10.0;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -307,14 +301,11 @@ fn simple_potentiation_long_term_stdp() {
     layer.neuron_params.adaptation_threshold = 2.0;
     layer.neuron_params.tau_threshold = 10.0;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -348,19 +339,16 @@ fn synaptic_transmission_count() {
     layer.num_neurons = 10;
     params.layers.push(layer.clone());
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params.conduction_delay_position_distance_scale_factor = 0.0;
-    connection_params.connect_width = 0.0;
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.0;
-    params.layer_connections.push(connection_params.clone());
-    connection_params.to_layer_id = 1;
-    connection_params.connect_width = f64::INFINITY;
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.conduction_delay_position_distance_scale_factor = 0.0;
+    projection_params.connect_width = 0.0;
+    projection_params.max_syn_weight = 1.0;
+    params.projections.push(projection_params.clone());
+    projection_params.to_layer_id = 1;
+    projection_params.connect_width = f64::INFINITY;
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -380,17 +368,14 @@ fn simple_potentiation_short_term_stdp() {
     layer.neuron_params.adaptation_threshold = 2.0;
     layer.neuron_params.tau_threshold = 10.0;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: STDP_PARAMS,
         tau: 1.0,
     });
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -427,16 +412,13 @@ fn pre_syn_spike_then_two_post_syn_spikes() {
     layer.neuron_params.tau_threshold = 10.0;
     layer.neuron_params.t_cutoff_coincidence = 10;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.0;
-    connection_params.connect_width = 2.0;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
+    projection_params.max_syn_weight = 1.0;
+    projection_params.connect_width = 2.0;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
 
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -477,16 +459,13 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
     layer.neuron_params.tau_threshold = 10.0;
     layer.neuron_params.t_cutoff_coincidence = 10;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.connect_width = 2.0;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.connect_width = 2.0;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
 
-    connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+    projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
             factor_pre_before_post: 0.05,
             tau_pre_before_post: 15.0,
@@ -496,7 +475,7 @@ fn post_syn_spike_then_two_pre_syn_spikes() {
         tau: 10.0,
     });
 
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -534,17 +513,14 @@ fn stdp_alternating_pre_post_syn_spikes() {
     layer.num_neurons = 2;
     layer.neuron_params.t_cutoff_coincidence = 20;
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.conduction_delay_add_on = 2;
-    connection_params.connect_width = 2.0;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.4);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.conduction_delay_add_on = 2;
+    projection_params.connect_width = 2.0;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
 
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -588,15 +564,12 @@ fn long_term_stdp_complex_scenario() {
     layer.num_neurons = 10;
     params.layers.push(layer.clone());
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params.conduction_delay_position_distance_scale_factor = 10.0;
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.0;
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.conduction_delay_position_distance_scale_factor = 10.0;
+    projection_params.max_syn_weight = 1.0;
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -695,14 +668,11 @@ fn no_dopamine() {
         dopamine_conflation_period: 10,
     });
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -733,14 +703,11 @@ fn negative_reward() {
     layer.plasticity_modulation_params = Some(plasticity_modulation_params);
     params.layers.push(layer);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -772,14 +739,11 @@ fn simple_dopamine_scenario() {
         dopamine_conflation_period: 10,
     });
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    params.layer_connections.push(connection_params);
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.max_syn_weight = 1.5;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -826,20 +790,17 @@ fn short_term_plasticity() {
     layer.num_neurons = 2;
     params.layers.push(layer.clone());
     params.layers.push(layer);
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_params.conduction_delay_position_distance_scale_factor = 5.0;
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 1.5;
-    connection_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_params.projection_params.stp_params = StpParams::Depression {
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_params.conduction_delay_position_distance_scale_factor = 5.0;
+    projection_params.max_syn_weight = 1.5;
+    projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_params.stp_params = StpParams::Depression {
         tau: 800.0,
         p0: 0.8,
         factor: 0.6,
     };
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -912,17 +873,14 @@ fn get_scenario_template_params() -> InstanceParams {
     layer.neuron_params.refractory_period = 5;
     params.layers.push(layer);
 
-    let mut connection_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    connection_params.initial_syn_weight = InitialSynWeight::Randomized(0.5);
-    connection_params.conduction_delay_position_distance_scale_factor = 0.0;
-    connection_params.connect_width = 0.2;
-    connection_params.conduction_delay_max_random_part = 20;
-    connection_params
-        .projection_params
-        .synapse_params
-        .max_weight = 0.5;
-    connection_params.projection_params.long_term_stdp_params = Some(StdpParams::default());
-    connection_params.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+    let mut projection_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    projection_params.initial_syn_weight = InitialSynWeight::Randomized(0.5);
+    projection_params.conduction_delay_position_distance_scale_factor = 0.0;
+    projection_params.connect_width = 0.2;
+    projection_params.conduction_delay_max_random_part = 20;
+    projection_params.max_syn_weight = 0.5;
+    projection_params.long_term_stdp_params = Some(StdpParams::default());
+    projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
             factor_pre_before_post: 0.01,
             tau_pre_before_post: 20.0,
@@ -931,35 +889,29 @@ fn get_scenario_template_params() -> InstanceParams {
         },
         tau: 500.0,
     });
-    connection_params.projection_params.stp_params = StpParams::Depression {
+    projection_params.stp_params = StpParams::Depression {
         tau: 800.0,
         p0: 0.9,
         factor: 0.2,
     };
-    params.layer_connections.push(connection_params.clone());
-    connection_params.to_layer_id = 1;
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = 2.0;
-    params.layer_connections.push(connection_params.clone());
+    params.projections.push(projection_params.clone());
+    projection_params.to_layer_id = 1;
+    projection_params.weight_scale_factor = 2.0;
+    params.projections.push(projection_params.clone());
 
-    connection_params.from_layer_id = 1;
-    connection_params.to_layer_id = 0;
+    projection_params.from_layer_id = 1;
+    projection_params.to_layer_id = 0;
 
-    connection_params.initial_syn_weight = InitialSynWeight::Constant(0.85);
-    connection_params.projection_params.long_term_stdp_params = None;
-    connection_params.projection_params.short_term_stdp_params = None;
-    connection_params.projection_params.stp_params = StpParams::NoStp;
-    connection_params.conduction_delay_max_random_part = 0;
-    connection_params
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = -1.0;
+    projection_params.initial_syn_weight = InitialSynWeight::Constant(0.85);
+    projection_params.long_term_stdp_params = None;
+    projection_params.short_term_stdp_params = None;
+    projection_params.stp_params = StpParams::NoStp;
+    projection_params.conduction_delay_max_random_part = 0;
+    projection_params.weight_scale_factor = -1.0;
 
-    params.layer_connections.push(connection_params.clone());
-    connection_params.to_layer_id = 1;
-    params.layer_connections.push(connection_params);
+    params.projections.push(projection_params.clone());
+    projection_params.to_layer_id = 1;
+    params.projections.push(projection_params);
 
     params
 }
@@ -1083,21 +1035,21 @@ fn invariance_zero_effect_projection() {
     let mut params = get_scenario_template_params();
     params.layers[0].num_neurons = 80;
     params.layers[1].num_neurons = 20;
-    for conn in params.layer_connections.iter_mut() {
+    for conn in params.projections.iter_mut() {
         conn.initial_syn_weight = InitialSynWeight::Constant(0.5);
         conn.conduction_delay_max_random_part = 0;
     }
 
     let mut params_zero_effect_projections = params.clone();
 
-    for (idx, conn_params) in params.layer_connections.iter().enumerate() {
-        let mut zero_effect_conn = &mut params_zero_effect_projections.layer_connections[idx];
+    for (idx, conn_params) in params.projections.iter().enumerate() {
+        let mut zero_effect_conn = &mut params_zero_effect_projections.projections[idx];
         zero_effect_conn.initial_syn_weight = InitialSynWeight::Constant(0.0);
-        let mut projection_params = &mut zero_effect_conn.projection_params;
+        let mut projection_params = &mut zero_effect_conn;
         projection_params.long_term_stdp_params = None;
         projection_params.short_term_stdp_params = None;
         params_zero_effect_projections
-            .layer_connections
+            .projections
             .push(conn_params.clone());
     }
 
@@ -1115,15 +1067,11 @@ fn zero_vs_absent_long_term_stdp() {
 
     params.layers[0].plasticity_modulation_params = None;
 
-    params.layer_connections[0].projection_params.stp_params = StpParams::NoStp;
+    params.projections[0].stp_params = StpParams::NoStp;
 
-    params.layer_connections[0]
-        .projection_params
-        .short_term_stdp_params = None;
+    params.projections[0].short_term_stdp_params = None;
 
-    params.layer_connections[0]
-        .projection_params
-        .long_term_stdp_params = Some(StdpParams {
+    params.projections[0].long_term_stdp_params = Some(StdpParams {
         factor_pre_before_post: 0.0,
         tau_pre_before_post: 20.0,
         factor_pre_after_post: 0.0,
@@ -1132,9 +1080,7 @@ fn zero_vs_absent_long_term_stdp() {
 
     let mut instances = Vec::new();
     instances.push(instance::create_instance(params.clone()).unwrap());
-    params.layer_connections[0]
-        .projection_params
-        .long_term_stdp_params = None;
+    params.projections[0].long_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 100, true, true, true);
 }
@@ -1145,15 +1091,11 @@ fn zero_vs_absent_short_term_stdp() {
 
     params.layers[0].plasticity_modulation_params = None;
 
-    params.layer_connections[0].projection_params.stp_params = StpParams::NoStp;
+    params.projections[0].stp_params = StpParams::NoStp;
 
-    params.layer_connections[0]
-        .projection_params
-        .long_term_stdp_params = None;
+    params.projections[0].long_term_stdp_params = None;
 
-    params.layer_connections[0]
-        .projection_params
-        .short_term_stdp_params = Some(ShortTermStdpParams {
+    params.projections[0].short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: StdpParams {
             factor_pre_before_post: 0.0,
             tau_pre_before_post: 20.0,
@@ -1165,9 +1107,7 @@ fn zero_vs_absent_short_term_stdp() {
 
     let mut instances = Vec::new();
     instances.push(instance::create_instance(params.clone()).unwrap());
-    params.layer_connections[0]
-        .projection_params
-        .short_term_stdp_params = None;
+    params.projections[0].short_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 100, true, true, true);
 }
@@ -1178,9 +1118,7 @@ fn zero_vs_absent_plasticity_modulation() {
     let mut instances = Vec::new();
     instances.push(instance::create_instance(params.clone()).unwrap());
     params.layers[0].plasticity_modulation_params = None;
-    params.layer_connections[0]
-        .projection_params
-        .long_term_stdp_params = None;
+    params.projections[0].long_term_stdp_params = None;
     instances.push(instance::create_instance(params).unwrap());
     assert_equivalence(&mut instances, 110, false, true, true);
 }
@@ -1194,14 +1132,14 @@ fn state_snapshot() {
     layer.num_neurons = 2;
     params.layers.push(layer);
 
-    let mut conn_params = LayerConnectionParams::defaults_for_layer_ids(0, 0);
-    conn_params.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    conn_params.projection_params.synapse_params.max_weight = 1.5;
+    let mut conn_params = ProjectionParams::defaults_for_layer_ids(0, 0);
+    conn_params.long_term_stdp_params = Some(STDP_PARAMS);
+    conn_params.max_syn_weight = 1.5;
     conn_params.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    params.layer_connections.push(conn_params.clone());
+    params.projections.push(conn_params.clone());
     conn_params.to_layer_id = 1;
     conn_params.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    params.layer_connections.push(conn_params);
+    params.projections.push(conn_params);
 
     let mut instance = create_instance(params).unwrap();
     tick(&mut instance, &[0]);
@@ -1246,11 +1184,11 @@ fn no_self_innervation() {
     layer.num_neurons = 5;
     params.layers.push(layer);
 
-    let mut conn_params = LayerConnectionParams::defaults_for_layer_ids(1, 0);
-    params.layer_connections.push(conn_params.clone());
+    let mut conn_params = ProjectionParams::defaults_for_layer_ids(1, 0);
+    params.projections.push(conn_params.clone());
     conn_params.to_layer_id = 1;
     conn_params.allow_self_innervation = false;
-    params.layer_connections.push(conn_params);
+    params.projections.push(conn_params);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1271,27 +1209,27 @@ fn multiple_projections_same_layer_pair() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut conn = LayerConnectionParams::defaults_for_layer_ids(0, 1);
+    let mut conn = ProjectionParams::defaults_for_layer_ids(0, 1);
     conn.initial_syn_weight = InitialSynWeight::Constant(0.5);
 
     conn.connect_width = 0.0;
-    conn.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    params.layer_connections.push(conn.clone());
+    conn.long_term_stdp_params = Some(STDP_PARAMS);
+    params.projections.push(conn.clone());
 
     conn.connect_width = 2.0;
     let mut stdp_params_modified = STDP_PARAMS.clone();
     stdp_params_modified.factor_pre_before_post = 0.2;
-    conn.projection_params.long_term_stdp_params = Some(stdp_params_modified);
-    params.layer_connections.push(conn.clone());
+    conn.long_term_stdp_params = Some(stdp_params_modified);
+    params.projections.push(conn.clone());
 
     conn.connect_width = 0.0;
-    conn.projection_params.long_term_stdp_params = None;
-    conn.projection_params.short_term_stdp_params = Some(ShortTermStdpParams {
+    conn.long_term_stdp_params = None;
+    conn.short_term_stdp_params = Some(ShortTermStdpParams {
         stdp_params: STDP_PARAMS,
         tau: 500.0,
     });
 
-    params.layer_connections.push(conn);
+    params.projections.push(conn);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1363,11 +1301,11 @@ fn sc_hashes_single() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection.conduction_delay_position_distance_scale_factor = 1.0;
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection.conduction_delay_position_distance_scale_factor = 1.0;
 
-    params.layer_connections.push(connection);
+    params.projections.push(projection);
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
@@ -1410,11 +1348,11 @@ fn sc_hashes_multi() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection.conduction_delay_position_distance_scale_factor = 1.0;
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection.conduction_delay_position_distance_scale_factor = 1.0;
 
-    params.layer_connections.push(connection);
+    params.projections.push(projection);
     params.technical_params.num_threads = Some(2);
 
     let mut instance = create_instance(params).unwrap();
@@ -1455,14 +1393,11 @@ fn no_sc_hashes_inhibitory() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection
-        .projection_params
-        .synapse_params
-        .weight_scale_factor = -1.0;
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection.weight_scale_factor = -1.0;
 
-    params.layer_connections.push(connection);
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     instance
@@ -1503,12 +1438,12 @@ fn sc_hashes_threshold_single() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    connection.projection_params.synapse_params.max_weight = 1.1;
-    connection.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    projection.max_syn_weight = 1.1;
+    projection.long_term_stdp_params = Some(STDP_PARAMS);
 
-    params.layer_connections.push(connection);
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     instance
@@ -1542,12 +1477,12 @@ fn sc_hashes_threshold_multi() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.initial_syn_weight = InitialSynWeight::Constant(1.0);
-    connection.projection_params.synapse_params.max_weight = 1.1;
-    connection.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.initial_syn_weight = InitialSynWeight::Constant(1.0);
+    projection.max_syn_weight = 1.1;
+    projection.long_term_stdp_params = Some(STDP_PARAMS);
 
-    params.layer_connections.push(connection);
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     instance
@@ -1609,19 +1544,19 @@ fn para_spikes_potentiation_no_depression() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_01.projection_params.synapse_params.max_weight = 0.5;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_01.max_syn_weight = 0.5;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
-    let mut connection_12 = LayerConnectionParams::defaults_for_layer_ids(1, 2);
-    connection_12.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_12.projection_params.synapse_params.max_weight = 1.0;
-    connection_12.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_12.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_12);
+    let mut projection_12 = ProjectionParams::defaults_for_layer_ids(1, 2);
+    projection_12.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_12.max_syn_weight = 1.0;
+    projection_12.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_12.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_12);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1677,19 +1612,19 @@ fn para_spikes_potentiation_and_depression() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_01.projection_params.synapse_params.max_weight = 0.4;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_01.max_syn_weight = 0.4;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
-    let mut connection_12 = LayerConnectionParams::defaults_for_layer_ids(1, 2);
-    connection_12.initial_syn_weight = InitialSynWeight::Constant(0.2);
-    connection_12.projection_params.synapse_params.max_weight = 0.4;
-    connection_12.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_12.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_12);
+    let mut projection_12 = ProjectionParams::defaults_for_layer_ids(1, 2);
+    projection_12.initial_syn_weight = InitialSynWeight::Constant(0.2);
+    projection_12.max_syn_weight = 0.4;
+    projection_12.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_12.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_12);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1750,12 +1685,12 @@ fn para_spike_and_normal_spike_simultaneous() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.5);
-    connection_01.projection_params.synapse_params.max_weight = 0.8;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.5);
+    projection_01.max_syn_weight = 0.8;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1796,12 +1731,12 @@ fn para_spike_then_normal_spike() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.4);
-    connection_01.projection_params.synapse_params.max_weight = 0.8;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.4);
+    projection_01.max_syn_weight = 0.8;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1835,12 +1770,12 @@ fn para_spike_then_force_spike() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_01.projection_params.synapse_params.max_weight = 0.5;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_01.max_syn_weight = 0.5;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1884,12 +1819,12 @@ fn force_spike_then_para_spike() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_01.projection_params.synapse_params.max_weight = 0.5;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_01.max_syn_weight = 0.5;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1938,12 +1873,12 @@ fn repeated_para_spikes_lead_to_normal_spikes() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.0);
-    connection_01.projection_params.synapse_params.max_weight = 0.501;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.0);
+    projection_01.max_syn_weight = 0.501;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -1982,12 +1917,12 @@ fn para_spikes_ephemeral_state_reset() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection_01 = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
-    connection_01.projection_params.synapse_params.max_weight = 0.5;
-    connection_01.projection_params.long_term_stdp_params = Some(STDP_PARAMS);
-    connection_01.conduction_delay_position_distance_scale_factor = 2.0;
-    params.layer_connections.push(connection_01);
+    let mut projection_01 = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection_01.initial_syn_weight = InitialSynWeight::Constant(0.1);
+    projection_01.max_syn_weight = 0.5;
+    projection_01.long_term_stdp_params = Some(STDP_PARAMS);
+    projection_01.conduction_delay_position_distance_scale_factor = 2.0;
+    params.projections.push(projection_01);
 
     let mut instance = create_instance(params).unwrap();
 
@@ -2029,9 +1964,9 @@ fn connectivity_1d_normal() {
     layer.num_neurons = 64;
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.connect_width = 0.1;
-    params.layer_connections.push(connection);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.connect_width = 0.1;
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     let state_snapshot = instance.extract_state_snapshot();
@@ -2056,9 +1991,9 @@ fn connectivity_1d_hyper_sphere() {
     layer.num_neurons = 64;
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.connect_width = 0.1;
-    params.layer_connections.push(connection);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.connect_width = 0.1;
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     let state_snapshot = instance.extract_state_snapshot();
@@ -2080,9 +2015,9 @@ fn connectivity_2d_normal() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.connect_width = 0.40001;
-    params.layer_connections.push(connection);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.connect_width = 0.40001;
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     let state_snapshot = instance.extract_state_snapshot();
@@ -2104,9 +2039,9 @@ fn connectivity_2d_hyper_sphere() {
     params.layers.push(layer.clone());
     params.layers.push(layer);
 
-    let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-    connection.connect_width = 0.40001;
-    params.layer_connections.push(connection);
+    let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+    projection.connect_width = 0.40001;
+    params.projections.push(projection);
 
     let mut instance = create_instance(params).unwrap();
     let state_snapshot = instance.extract_state_snapshot();

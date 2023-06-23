@@ -1,4 +1,4 @@
-use crate::{params::SynapseParams, util::get_decay_factor};
+use crate::{params::ProjectionParams, util::get_decay_factor};
 
 pub struct Synapse {
     pub neuron_idx: usize,
@@ -28,7 +28,7 @@ impl Synapse {
         &mut self,
         t: usize,
         stp_value: f32,
-        syn_params: &SynapseParams,
+        projection_params: &ProjectionParams,
         short_term_stdp_tau: f32,
     ) -> ProcessPreSynSpikeResult {
         let decay_factor = get_decay_factor(
@@ -39,16 +39,21 @@ impl Synapse {
 
         let short_term_stdp = self.short_term_stdp_offset * decay_factor;
         let adjusted_weight = (self.weight * stp_value + short_term_stdp).max(0.0);
-        let para_adjusted_weight = (syn_params.max_weight * stp_value + short_term_stdp).max(0.0);
+        let para_adjusted_weight =
+            (projection_params.max_syn_weight * stp_value + short_term_stdp).max(0.0);
 
-        let psp = syn_params.weight_scale_factor * adjusted_weight;
-        let para_psp = syn_params.weight_scale_factor * para_adjusted_weight;
+        let psp = projection_params.weight_scale_factor * adjusted_weight;
+        let para_psp = projection_params.weight_scale_factor * para_adjusted_weight;
 
         ProcessPreSynSpikeResult { psp, para_psp }
     }
 
-    pub fn process_weight_change(&mut self, weight_change: f32, syn_params: &SynapseParams) {
-        self.weight = (self.weight + weight_change).clamp(0.0, syn_params.max_weight);
+    pub fn process_weight_change(
+        &mut self,
+        weight_change: f32,
+        projection_params: &ProjectionParams,
+    ) {
+        self.weight = (self.weight + weight_change).clamp(0.0, projection_params.max_syn_weight);
     }
 
     pub fn process_short_term_stdp(&mut self, t: usize, stdp_value: f32, short_term_stdp_tau: f32) {
@@ -77,9 +82,11 @@ mod tests {
     use super::*;
     use float_cmp::assert_approx_eq;
 
-    const SYNAPSE_PARAMS: SynapseParams = SynapseParams {
-        max_weight: 0.5,
-        weight_scale_factor: 0.1,
+    const PROJECTION_PARAMS: ProjectionParams = {
+        let mut params = ProjectionParams::defaults_for_layer_ids(0, 0);
+        params.max_syn_weight = 0.5;
+        params.weight_scale_factor = 0.1;
+        params
     };
 
     const SHORT_TERM_STDP_TAU: f32 = 10.0;
@@ -88,7 +95,7 @@ mod tests {
     fn weight_change() {
         let mut sut = Synapse::new(0, 0, 0.4);
         assert_approx_eq!(f32, sut.weight, 0.4);
-        sut.process_weight_change(-0.1, &SYNAPSE_PARAMS);
+        sut.process_weight_change(-0.1, &PROJECTION_PARAMS);
         assert_approx_eq!(f32, sut.weight, 0.3);
     }
 
@@ -96,7 +103,7 @@ mod tests {
     fn weight_floor() {
         let mut sut = Synapse::new(0, 0, 0.4);
         assert_approx_eq!(f32, sut.weight, 0.4);
-        sut.process_weight_change(-0.5, &SYNAPSE_PARAMS);
+        sut.process_weight_change(-0.5, &PROJECTION_PARAMS);
         assert_approx_eq!(f32, sut.weight, 0.0);
     }
 
@@ -104,7 +111,7 @@ mod tests {
     fn weight_ceil() {
         let mut sut = Synapse::new(0, 0, 0.4);
         assert_approx_eq!(f32, sut.weight, 0.4);
-        sut.process_weight_change(0.3, &SYNAPSE_PARAMS);
+        sut.process_weight_change(0.3, &PROJECTION_PARAMS);
         assert_approx_eq!(f32, sut.weight, 0.5);
     }
 
@@ -112,16 +119,16 @@ mod tests {
     fn stp() {
         let mut sut = Synapse::new(0, 0, 0.4);
         let result =
-            sut.process_pre_syn_spike_get_psp(4, 2.0, &SYNAPSE_PARAMS, SHORT_TERM_STDP_TAU);
+            sut.process_pre_syn_spike_get_psp(4, 2.0, &PROJECTION_PARAMS, SHORT_TERM_STDP_TAU);
         assert_approx_eq!(
             f32,
             result.psp,
-            2.0 * 0.4 * SYNAPSE_PARAMS.weight_scale_factor
+            2.0 * 0.4 * PROJECTION_PARAMS.weight_scale_factor
         );
         assert_approx_eq!(
             f32,
             result.para_psp,
-            2.0 * SYNAPSE_PARAMS.max_weight * SYNAPSE_PARAMS.weight_scale_factor
+            2.0 * PROJECTION_PARAMS.max_syn_weight * PROJECTION_PARAMS.weight_scale_factor
         );
     }
 
@@ -137,20 +144,20 @@ mod tests {
 
         // stdp offset should decay
         let result =
-            sut.process_pre_syn_spike_get_psp(19, 1.0, &SYNAPSE_PARAMS, SHORT_TERM_STDP_TAU);
+            sut.process_pre_syn_spike_get_psp(19, 1.0, &PROJECTION_PARAMS, SHORT_TERM_STDP_TAU);
         let expected_short_term_stdp_offset = 1.0 * (-1.5f32).exp();
 
         assert_approx_eq!(
             f32,
             result.psp,
-            (0.4 + expected_short_term_stdp_offset) * SYNAPSE_PARAMS.weight_scale_factor
+            (0.4 + expected_short_term_stdp_offset) * PROJECTION_PARAMS.weight_scale_factor
         );
 
         assert_approx_eq!(
             f32,
             result.para_psp,
-            (SYNAPSE_PARAMS.max_weight + expected_short_term_stdp_offset)
-                * SYNAPSE_PARAMS.weight_scale_factor
+            (PROJECTION_PARAMS.max_syn_weight + expected_short_term_stdp_offset)
+                * PROJECTION_PARAMS.weight_scale_factor
         );
 
         // next short term stdp event should add to the decayed value
@@ -170,26 +177,26 @@ mod tests {
 
         // floored weight after negative short term stdp event
         let result =
-            sut.process_pre_syn_spike_get_psp(5, 1.0, &SYNAPSE_PARAMS, SHORT_TERM_STDP_TAU);
+            sut.process_pre_syn_spike_get_psp(5, 1.0, &PROJECTION_PARAMS, SHORT_TERM_STDP_TAU);
         assert_approx_eq!(f32, result.psp, 0.0);
         assert_approx_eq!(f32, result.para_psp, 0.0);
 
         // short term stdp offset decays beyond flooring threshold
         let result =
-            sut.process_pre_syn_spike_get_psp(19, 1.0, &SYNAPSE_PARAMS, SHORT_TERM_STDP_TAU);
+            sut.process_pre_syn_spike_get_psp(19, 1.0, &PROJECTION_PARAMS, SHORT_TERM_STDP_TAU);
         let expected_short_term_stdp_offset = -0.6 * (-1.5f32).exp();
 
         assert_approx_eq!(
             f32,
             result.psp,
-            (0.4 + expected_short_term_stdp_offset) * SYNAPSE_PARAMS.weight_scale_factor
+            (0.4 + expected_short_term_stdp_offset) * PROJECTION_PARAMS.weight_scale_factor
         );
 
         assert_approx_eq!(
             f32,
             result.para_psp,
-            (SYNAPSE_PARAMS.max_weight + expected_short_term_stdp_offset)
-                * SYNAPSE_PARAMS.weight_scale_factor
+            (PROJECTION_PARAMS.max_syn_weight + expected_short_term_stdp_offset)
+                * PROJECTION_PARAMS.weight_scale_factor
         );
     }
 }

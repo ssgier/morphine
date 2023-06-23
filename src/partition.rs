@@ -17,9 +17,7 @@ use crate::util::SynapseCoordinate;
 use crate::{
     batched_ring_buffer::BatchedRingBuffer,
     neuron::Neuron,
-    params::{
-        InitialSynWeight, InstanceParams, LayerConnectionParams, NeuronParams, ProjectionParams,
-    },
+    params::{InitialSynWeight, InstanceParams, NeuronParams, ProjectionParams},
     plasticity_modulation::PlasticityModulator,
     short_term_plasticity::{self, ShortTermPlasticity},
     spike_coincidence::SpikeCoincidence,
@@ -89,13 +87,13 @@ struct TransmissionEvent {
 
 struct ProcessSpikeCoincidenceResult {
     syn_weight: f32,
-    max_weight: f32,
+    max_syn_weight: f32,
     weight_scale_factor: f32,
 }
 
 impl ProcessSpikeCoincidenceResult {
     fn is_sc_contrib(&self, threshold: f32) -> bool {
-        self.weight_scale_factor > 0.0 && self.syn_weight / self.max_weight >= threshold
+        self.weight_scale_factor > 0.0 && self.syn_weight / self.max_syn_weight >= threshold
     }
 }
 
@@ -108,7 +106,7 @@ pub fn create_partitions(
 
     let mut to_layer_id_to_prj_id_and_conn_params = HashMap::default();
 
-    for conn in params.layer_connections.iter().enumerate() {
+    for conn in params.projections.iter().enumerate() {
         to_layer_id_to_prj_id_and_conn_params
             .entry(conn.1.to_layer_id)
             .or_insert_with(Vec::new)
@@ -153,16 +151,16 @@ pub fn create_partitions(
             .as_ref()
             .map(|params| PlasticityModulator::new(params.clone()));
 
-        if let Some(connection_params_elements) =
+        if let Some(projection_params_elements) =
             to_layer_id_to_prj_id_and_conn_params.get(&layer_id)
         {
-            for (projection_id, connection_params) in connection_params_elements.iter() {
-                let to_num_neurons = params.layers[connection_params.to_layer_id].num_neurons;
+            for (projection_id, projection_params) in projection_params_elements {
+                let to_num_neurons = params.layers[projection_params.to_layer_id].num_neurons;
                 if to_num_neurons == 0 {
                     continue;
                 }
 
-                let from_num_neurons = params.layers[connection_params.from_layer_id].num_neurons;
+                let from_num_neurons = params.layers[projection_params.from_layer_id].num_neurons;
 
                 let distance_calc = DistanceCalculator::new(
                     params.position_dim,
@@ -172,7 +170,7 @@ pub fn create_partitions(
                 );
 
                 for from_idx in 0..from_num_neurons {
-                    let from_nid = layer_nid_starts[connection_params.from_layer_id] + from_idx;
+                    let from_nid = layer_nid_starts[projection_params.from_layer_id] + from_idx;
 
                     let mut synapses = Vec::new();
 
@@ -183,8 +181,8 @@ pub fn create_partitions(
 
                             let connection_probability = util::compute_connection_probabiltity(
                                 position_distance,
-                                connection_params.connect_width,
-                                connection_params.smooth_connect_probability,
+                                projection_params.connect_width,
+                                projection_params.smooth_connect_probability,
                             );
 
                             let neuron_idx = to_idx - partition_range.start;
@@ -206,18 +204,18 @@ pub fn create_partitions(
 
                             if is_connection {
                                 let conduction_delay = compute_conduction_delay(
-                                    connection_params,
+                                    projection_params,
                                     position_distance,
                                     &mut rng,
                                 );
 
                                 let init_weight = compute_initial_weight(
-                                    &connection_params.initial_syn_weight,
+                                    &projection_params.initial_syn_weight,
                                     &mut rng,
                                 );
 
                                 if pre_syn_nid != post_syn_nid
-                                    || connection_params.allow_self_innervation
+                                    || projection_params.allow_self_innervation
                                 {
                                     let synapse =
                                         Synapse::new(neuron_idx, conduction_delay, init_weight);
@@ -233,10 +231,8 @@ pub fn create_partitions(
 
                         let projection = Projection {
                             synapses,
-                            stp: short_term_plasticity::create(
-                                &connection_params.projection_params.stp_params,
-                            ),
-                            prj_params: connection_params.projection_params.clone(),
+                            stp: short_term_plasticity::create(&projection_params.stp_params),
+                            prj_params: (*(*projection_params)).clone(),
                             last_pre_syn_spike_t: None,
                             next_to_last_pre_syn_spike_t: None,
                             projection_id: *projection_id,
@@ -301,21 +297,21 @@ fn compute_initial_weight(init_syn_weight: &InitialSynWeight, rng: &mut StdRng) 
 }
 
 fn compute_conduction_delay(
-    connection_params: &LayerConnectionParams,
+    projection_params: &ProjectionParams,
     position_distance: f64,
     rng: &mut StdRng,
 ) -> u8 {
     let mut result = 1;
 
     let random_part =
-        Uniform::from(0..=(connection_params.conduction_delay_max_random_part)).sample(rng);
+        Uniform::from(0..=(projection_params.conduction_delay_max_random_part)).sample(rng);
 
     result += random_part;
 
     result += (position_distance
-        * connection_params.conduction_delay_position_distance_scale_factor)
+        * projection_params.conduction_delay_position_distance_scale_factor)
         .round() as usize
-        + connection_params.conduction_delay_add_on;
+        + projection_params.conduction_delay_add_on;
 
     result as u8
 }
@@ -491,10 +487,7 @@ impl Partition {
 
                     let synapse = &mut projection.synapses[event.syn_coord.synapse_idx];
 
-                    synapse.process_weight_change(
-                        event.weight_change,
-                        &projection.prj_params.synapse_params,
-                    );
+                    synapse.process_weight_change(event.weight_change, &projection.prj_params);
                 }
             }
         }
@@ -686,14 +679,14 @@ impl Partition {
                     stdp_value,
                 );
             } else {
-                synapse.process_weight_change(stdp_value, &projection.prj_params.synapse_params)
+                synapse.process_weight_change(stdp_value, &projection.prj_params)
             }
         }
 
         ProcessSpikeCoincidenceResult {
             syn_weight: syn_weight_before,
-            max_weight: projection.prj_params.synapse_params.max_weight,
-            weight_scale_factor: projection.prj_params.synapse_params.weight_scale_factor,
+            max_syn_weight: projection.prj_params.max_syn_weight,
+            weight_scale_factor: projection.prj_params.weight_scale_factor,
         }
     }
 
@@ -779,7 +772,7 @@ impl Partition {
                     let psp_result = synapse.process_pre_syn_spike_get_psp(
                         spike_t,
                         stp_value,
-                        &projection.prj_params.synapse_params,
+                        &projection.prj_params,
                         short_term_stdp_tau,
                     );
 
@@ -807,7 +800,7 @@ impl Partition {
 #[cfg(test)]
 mod tests {
     use crate::{
-        params::{LayerParams, TechnicalParams},
+        params::{LayerParams, StpParams, TechnicalParams},
         types::tests::HashSet,
     };
 
@@ -817,17 +810,21 @@ mod tests {
 
     #[test]
     fn conduction_delay() {
-        let mut conn_params = LayerConnectionParams {
+        let mut conn_params = ProjectionParams {
             from_layer_id: 5,
             to_layer_id: 3,
-            projection_params: ProjectionParams::default(),
             smooth_connect_probability: false,
             connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.2),
+            max_syn_weight: 1.0,
+            weight_scale_factor: 1.0,
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
             conduction_delay_add_on: 4,
             allow_self_innervation: true,
+            long_term_stdp_params: None,
+            short_term_stdp_params: None,
+            stp_params: StpParams::NoStp,
         };
 
         let mut rng = StdRng::seed_from_u64(0);
@@ -864,22 +861,26 @@ mod tests {
 
         layers.push(layer_params);
 
-        let connection_params = LayerConnectionParams {
+        let projection_params = ProjectionParams {
             from_layer_id: 0,
             to_layer_id: 1,
-            projection_params: ProjectionParams::default(),
             smooth_connect_probability: false,
             connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.5),
+            max_syn_weight: 1.0,
+            weight_scale_factor: 1.0,
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 2.0,
             conduction_delay_add_on: 0,
             allow_self_innervation: true,
+            stp_params: StpParams::NoStp,
+            long_term_stdp_params: None,
+            short_term_stdp_params: None,
         };
 
         let instance_params = InstanceParams {
             layers,
-            layer_connections: vec![connection_params],
+            projections: vec![projection_params],
             position_dim: 1,
             hyper_sphere: false,
             technical_params: TechnicalParams::default(),
@@ -927,22 +928,26 @@ mod tests {
             use_para_spikes: false,
         };
 
-        let conn_params = LayerConnectionParams {
+        let conn_params = ProjectionParams {
             from_layer_id: 0,
             to_layer_id: 0,
-            projection_params: ProjectionParams::default(),
             smooth_connect_probability: false,
             connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Randomized(0.2),
+            max_syn_weight: 1.0,
+            weight_scale_factor: 1.0,
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 5.0,
             conduction_delay_add_on: 0,
             allow_self_innervation: true,
+            stp_params: StpParams::NoStp,
+            long_term_stdp_params: None,
+            short_term_stdp_params: None,
         };
 
         let mut params = InstanceParams::default();
         params.layers.push(layer);
-        params.layer_connections.push(conn_params);
+        params.projections.push(conn_params);
 
         let partitions = create_partitions(1, 0, &params);
 
@@ -996,22 +1001,26 @@ mod tests {
         params.layers.push(layer_1);
         params.layers.push(layer_2);
 
-        let connection_params = LayerConnectionParams {
+        let projection_params = ProjectionParams {
             from_layer_id: 1,
             to_layer_id: 2,
-            projection_params: ProjectionParams::default(),
             smooth_connect_probability: false,
             connect_width: f64::INFINITY,
             initial_syn_weight: InitialSynWeight::Constant(0.2),
+            max_syn_weight: 1.0,
+            weight_scale_factor: 1.0,
             conduction_delay_max_random_part: 0,
             conduction_delay_position_distance_scale_factor: 10.0,
             conduction_delay_add_on: 5,
             allow_self_innervation: true,
+            stp_params: StpParams::NoStp,
+            long_term_stdp_params: None,
+            short_term_stdp_params: None,
         };
 
-        params.layer_connections.push(connection_params);
+        params.projections.push(projection_params);
 
-        // full connection
+        // full projection
         let partitions = create_partitions(1, 0, &params);
 
         assert_eq!(partitions.len(), 3);
@@ -1057,8 +1066,8 @@ mod tests {
         // total = 10
         assert_eq!(synapses_for_nid_65[9].conduction_delay, 10);
 
-        // narrow connection
-        params.layer_connections[0].connect_width = 0.4;
+        // narrow projection
+        params.projections[0].connect_width = 0.4;
         let partitions = create_partitions(1, 0, &params);
 
         assert_eq!(partitions[2].nid_to_projections.len(), 100);
@@ -1091,8 +1100,8 @@ mod tests {
             4..8,
         );
 
-        // sparse connection
-        params.layer_connections[0].connect_width = 0.25;
+        // sparse projection
+        params.projections[0].connect_width = 0.25;
         let partitions = create_partitions(1, 0, &params);
 
         assert_eq!(partitions[2].nid_to_projections.len(), 100);
@@ -1117,10 +1126,10 @@ mod tests {
         layer.num_neurons = 3;
         params.layers.push(layer);
 
-        let mut connection = LayerConnectionParams::defaults_for_layer_ids(0, 1);
-        connection.connect_width = 0.0;
+        let mut projection = ProjectionParams::defaults_for_layer_ids(0, 1);
+        projection.connect_width = 0.0;
 
-        params.layer_connections.push(connection);
+        params.projections.push(projection);
 
         let partitions = create_partitions(1, 0, &params);
 
